@@ -1,0 +1,19 @@
+#nullable enable
+const Hindsight.HindsightAnnotationNames.HistoryTableName = "Hindsight:HistoryTableName" -> string!
+const Hindsight.HindsightAnnotationNames.HistoryTableSchema = "Hindsight:HistoryTableSchema" -> string!
+const Hindsight.HindsightAnnotationNames.IsExcluded = "Hindsight:IsExcluded" -> string!
+const Hindsight.HindsightAnnotationNames.IsTemporal = "Hindsight:IsTemporal" -> string!
+const Hindsight.HindsightAnnotationNames.PeriodEndColumnName = "Hindsight:PeriodEnd" -> string!
+const Hindsight.HindsightAnnotationNames.PeriodStartColumnName = "Hindsight:PeriodStart" -> string!
+const Hindsight.HindsightAnnotationNames.Prefix = "Hindsight:" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix = "_history" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName = "valid_to" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName = "valid_from" -> string!
+Hindsight.HindsightAnnotationNames
+Hindsight.TemporalEntityTypeBuilder<TEntity>
+Hindsight.TemporalEntityTypeBuilder<TEntity>.Exclude<TProperty>(System.Linq.Expressions.Expression<System.Func<TEntity!, TProperty>!>! property) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodEnd(string! columnName) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodStart(string! columnName) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.UseHistoryTable(string! name, string? schema = null) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilderExtensions
+static Hindsight.TemporalEntityTypeBuilderExtensions.IsTemporal<TEntity>(this Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>! builder, System.Action<Hindsight.TemporalEntityTypeBuilder<TEntity!>!>? configure = null) -> Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>!

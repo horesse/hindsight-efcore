@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      efcore:
+        patterns: ["Microsoft.EntityFrameworkCore*", "Npgsql*"]
+      tests:
+        patterns: ["xunit*", "Microsoft.NET.Test.Sdk", "Verify*", "Testcontainers*"]
+      tooling:
+        patterns: ["MinVer", "Microsoft.CodeAnalysis*", "BenchmarkDotNet"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

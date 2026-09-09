@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hindsight.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Verify.XunitV3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>

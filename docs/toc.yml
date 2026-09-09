@@ -1,0 +1,8 @@
+- name: Guide
+  href: articles/
+- name: API Reference
+  href: api/
+- name: Design
+  href: design.md
+- name: GitHub
+  href: https://github.com/horesse/hindsight-efcore

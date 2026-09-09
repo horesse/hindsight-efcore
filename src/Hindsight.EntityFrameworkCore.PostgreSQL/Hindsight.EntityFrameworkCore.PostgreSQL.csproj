@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hindsight</RootNamespace>
+    <AssemblyName>Hindsight.EntityFrameworkCore.PostgreSQL</AssemblyName>
+    <PackageId>Hindsight.EntityFrameworkCore.PostgreSQL</PackageId>
+    <Title>Hindsight for EF Core (PostgreSQL)</Title>
+    <Description>System-versioned temporal entities for EF Core on PostgreSQL. No database extensions, no superuser: history tables live in your EF Core migrations, change context (who / why / correlation id) comes from the application, and AsOf() queries are plain LINQ.</Description>
+    <PackageTags>efcore;entity-framework-core;postgresql;npgsql;temporal;system-versioned;history;audit;as-of</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hindsight.Tests" />
+    <InternalsVisibleTo Include="Hindsight.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

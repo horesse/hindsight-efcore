@@ -1,6 +1,36 @@
+# Build
 bin/
 obj/
-/packages/
-riderModule.iml
-/_ReSharper.Caches/
+artifacts/
+*.nupkg
+*.snupkg
+BenchmarkDotNet.Artifacts/
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.received.*
+
+# IDE
+.vs/
+.vscode/
 .idea/
+*.user
+*.suo
+*.swp
+*.DotSettings.user
+launchSettings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local secrets / env
+*.env
+.env.*
+!.env.example
+
+# DocFX
+docs/_site/
+docs/api/*.yml
+docs/api/.manifest

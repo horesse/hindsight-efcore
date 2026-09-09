@@ -1,0 +1,14 @@
+- name: Getting started
+  href: getting-started.md
+- name: Concepts
+  href: concepts.md
+- name: Configuration
+  href: configuration.md
+- name: Querying history
+  href: querying.md
+- name: History writers
+  href: history-writers.md
+- name: Schema evolution
+  href: schema-evolution.md
+- name: Limitations and non-goals
+  href: limitations.md

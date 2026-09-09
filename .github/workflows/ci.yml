@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+
+jobs:
+  build-and-test:
+    name: Build, test, pack
+    runs-on: ubuntu-latest
+    # Testcontainers needs Docker; ubuntu-latest has it. Postgres image is pulled by the tests themselves.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # MinVer needs tags and history
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/Directory.Packages.props', '**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Format check
+        run: dotnet format --no-restore --verify-no-changes --verbosity diagnostic
+
+      - name: Unit tests
+        run: >
+          dotnet test tests/Hindsight.Tests --no-build --configuration Release
+          --logger "trx;LogFileName=unit.trx" --results-directory TestResults
+
+      - name: Integration tests
+        run: >
+          dotnet test tests/Hindsight.IntegrationTests --no-build --configuration Release
+          --logger "trx;LogFileName=integration.trx" --results-directory TestResults
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Test results
+          path: TestResults/*.trx
+          reporter: dotnet-trx
+
+      - name: Docs build (broken links / missing xrefs fail the PR)
+        run: |
+          dotnet tool restore
+          dotnet docfx docs/docfx.json --warningsAsErrors
+
+      - name: Pack (validate packaging on every build)
+        run: dotnet pack src/Hindsight.EntityFrameworkCore.PostgreSQL --no-build --configuration Release --output artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts/*.nupkg
+          if-no-files-found: error

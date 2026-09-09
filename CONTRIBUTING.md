@@ -28,5 +28,6 @@ dotnet docfx docs/docfx.json --serve            # docs at http://localhost:8080
 
 1. Move `Unreleased` in `CHANGELOG.md` under the new version.
 2. Create a GitHub Release with tag `vX.Y.Z` (or `vX.Y.Z-preview.N`). The `Release` workflow builds,
-   tests, packs and pushes to nuget.org. The tag is the version — MinVer reads it.
+   tests, packs, waits for approval on the `nuget` environment and pushes to nuget.org via Trusted
+   Publishing (OIDC, no stored API key). The tag is the version — MinVer reads it.
 3. Move `PublicAPI.Unshipped.txt` entries into `PublicAPI.Shipped.txt` in the next commit.

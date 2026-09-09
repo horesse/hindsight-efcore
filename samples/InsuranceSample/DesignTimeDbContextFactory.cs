@@ -1,3 +1,4 @@
+using Hindsight;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
@@ -16,6 +17,7 @@ public sealed class DesignTimeDbContextFactory : IDesignTimeDbContextFactory<Ins
 
         var options = new DbContextOptionsBuilder<InsuranceDbContext>()
             .UseNpgsql(connectionString)
+            .UseHindsight()
             .Options;
 
         return new InsuranceDbContext(options);

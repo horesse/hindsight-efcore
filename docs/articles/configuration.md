@@ -20,7 +20,22 @@ modelBuilder.Entity<Risk>().IsTemporal(t => t
 `Exclude` removes a property from versioning entirely: the column is not copied to the history table,
 and a `SaveChanges` that touched only excluded properties writes no history row.
 
+## Enabling Hindsight
+
+```csharp
+services.AddDbContext<AppDbContext>(o => o
+    .UseNpgsql(connectionString)
+    .UseHindsight());
+```
+
+`UseHindsight()` turns on the convention that builds a history table into the model for every
+`IsTemporal()` entity. This is the form available today; the change-context and writer options below
+are planned.
+
 ## Context configuration
+
+> [!NOTE]
+> Not implemented yet. The shape below is the v1 target.
 
 ```csharp
 options.UseHindsight(h => h
@@ -50,4 +65,4 @@ Hindsight validates the model at build time and fails fast with a specific messa
 - the history table name collides with another table;
 - a required property without a default is excluded;
 - a temporal entity is an owned type;
-- a temporal entity is part of a TPH hierarchy (not supported in v1).
+- a temporal entity takes part in an inheritance hierarchy (not supported in v1).

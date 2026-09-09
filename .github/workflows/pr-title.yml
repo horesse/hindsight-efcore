@@ -1,0 +1,49 @@
+name: PR title
+
+# Squash-merge turns the PR title into the commit on master, so the title must be a valid
+# Conventional Commit. Types and scopes are the closed lists below — extend them here, not ad hoc.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            refactor
+            docs
+            test
+            build
+            ci
+            chore
+            revert
+          scopes: |
+            model
+            migrations
+            writer
+            query
+            context
+            analyzer
+            sample
+            bench
+            docs
+            ci
+            deps
+            release
+          requireScope: false
+          subjectPattern: ^(?![A-Z]).+$
+          subjectPatternError: >
+            The subject "{subject}" must start with a lowercase letter
+            (e.g. "feat(query): translate AsOf root replacement").

@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaves differently from the docs
+labels: ["kind:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check [Limitations and non-goals](https://horesse.github.io/hindsight-efcore/articles/limitations.html) first — several things are deliberately unsupported in v1.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Hindsight / EF Core / Npgsql.EntityFrameworkCore.PostgreSQL / PostgreSQL server
+      placeholder: "0.1.0-preview.1 / 10.0.12 / 10.0.3 / 17.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: writer
+    attributes:
+      label: History writer
+      options: ["Trigger", "Interceptor", "Not sure"]
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: Minimal model and configuration
+      description: The smallest entity + `OnModelCreating` that reproduces it.
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps / code that triggers the problem
+      render: csharp
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: Exception text, or the generated SQL / migration if that is what's wrong.
+      render: text
+    validations:
+      required: true

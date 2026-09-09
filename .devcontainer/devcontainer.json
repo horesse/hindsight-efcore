@@ -1,0 +1,31 @@
+{
+  "name": "hindsight-efcore",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "postCreateCommand": "dotnet tool restore && dotnet restore",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-dotnettools.csdevkit",
+        "editorconfig.editorconfig",
+        "github.vscode-github-actions"
+      ],
+      "settings": {
+        "dotnet.defaultSolution": "Hindsight.slnx",
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "remoteEnv": {
+    "DOTNET_NOLOGO": "true",
+    "DOTNET_CLI_TELEMETRY_OPTOUT": "true",
+    "TESTCONTAINERS_RYUK_DISABLED": "false"
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb"
+  }
+}

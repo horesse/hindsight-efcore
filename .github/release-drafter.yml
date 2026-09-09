@@ -1,0 +1,73 @@
+# Release Drafter keeps a draft GitHub Release up to date from merged PRs.
+# The tag/version is still chosen by hand when publishing (MinVer reads the tag).
+
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+prerelease: true
+prerelease-identifier: preview
+
+categories:
+  - title: "⚠️ Breaking changes"
+    labels: ["breaking"]
+  - title: "✨ Features"
+    labels: ["kind:feature"]
+  - title: "🐛 Fixes"
+    labels: ["kind:bug"]
+  - title: "⚡ Performance"
+    labels: ["kind:perf"]
+  - title: "📚 Documentation"
+    labels: ["area:docs"]
+  - title: "🧰 Maintenance"
+    labels: ["kind:chore", "area:ci"]
+    collapse-after: 5
+  - title: "📦 Dependencies"
+    labels: ["dependencies"]
+    collapse-after: 3
+
+exclude-labels:
+  - "skip-changelog"
+
+change-template: "- $TITLE (#$NUMBER)"
+change-title-escapes: '\<*_&'
+
+version-resolver:
+  major:
+    labels: ["breaking"]
+  minor:
+    labels: ["kind:feature"]
+  patch:
+    labels: ["kind:bug", "kind:perf", "kind:chore", "dependencies", "area:docs"]
+  default: patch
+
+autolabeler:
+  - label: "kind:feature"
+    title: ['/^feat(\(.+\))?!?:/']
+  - label: "kind:bug"
+    title: ['/^fix(\(.+\))?!?:/']
+  - label: "kind:perf"
+    title: ['/^perf(\(.+\))?!?:/']
+  - label: "kind:chore"
+    title: ['/^(chore|refactor|build|test|revert)(\(.+\))?!?:/']
+  - label: "area:docs"
+    title: ['/^docs(\(.+\))?!?:/', '/\(docs\)/']
+  - label: "area:ci"
+    title: ['/^ci(\(.+\))?!?:/', '/\(ci\)/']
+  - label: "breaking"
+    title: ['/^[a-z]+(\(.+\))?!:/']
+  - label: "area:model"
+    title: ['/\(model\)/']
+  - label: "area:migrations"
+    title: ['/\(migrations\)/']
+  - label: "area:writer"
+    title: ['/\(writer\)/']
+  - label: "area:query"
+    title: ['/\(query\)/']
+
+template: |
+  ## What's changed
+
+  $CHANGES
+
+  **Full changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+  Install: `dotnet add package Hindsight.EntityFrameworkCore.PostgreSQL --version $RESOLVED_VERSION`

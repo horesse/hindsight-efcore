@@ -29,4 +29,16 @@ public static class HindsightAnnotationNames
     /// produce a history row. Value: <see langword="true"/>.
     /// </summary>
     public const string IsExcluded = Prefix + "IsExcluded";
+
+    /// <summary>
+    /// On a temporal entity type: the shared-type name of its generated history entity type.
+    /// Written by the model-finalizing convention. Value: <see cref="string"/>.
+    /// </summary>
+    internal const string HistoryEntityType = Prefix + "HistoryEntityType";
+
+    /// <summary>
+    /// Marks the generated property-bag entity type as a Hindsight history table.
+    /// Value: <see langword="true"/>.
+    /// </summary>
+    internal const string IsHistoryTable = Prefix + "IsHistoryTable";
 }

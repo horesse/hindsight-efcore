@@ -11,6 +11,11 @@ const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName =
 const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName = "valid_from" -> string!
 Hindsight.HindsightAnnotationNames
 Hindsight.HindsightDbContextOptionsExtensions
+Hindsight.HindsightOptionsBuilder
+Hindsight.HindsightOptionsBuilder.UseHistoryWriter(Hindsight.HistoryWriter writer) -> Hindsight.HindsightOptionsBuilder!
+Hindsight.HistoryWriter
+Hindsight.HistoryWriter.Interceptor = 0 -> Hindsight.HistoryWriter
+Hindsight.HistoryWriter.Trigger = 1 -> Hindsight.HistoryWriter
 Hindsight.TemporalEntityTypeBuilder<TEntity>
 Hindsight.TemporalEntityTypeBuilder<TEntity>.Exclude<TProperty>(System.Linq.Expressions.Expression<System.Func<TEntity!, TProperty>!>! property) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
 Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodEnd(string! columnName) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
@@ -18,5 +23,7 @@ Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodStart(string! columnName) 
 Hindsight.TemporalEntityTypeBuilder<TEntity>.UseHistoryTable(string! name, string? schema = null) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
 Hindsight.TemporalEntityTypeBuilderExtensions
 static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! optionsBuilder) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
 static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
 static Hindsight.TemporalEntityTypeBuilderExtensions.IsTemporal<TEntity>(this Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>! builder, System.Action<Hindsight.TemporalEntityTypeBuilder<TEntity!>!>? configure = null) -> Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>!

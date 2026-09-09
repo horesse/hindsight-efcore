@@ -63,7 +63,7 @@ jobs:
           --report-trx --report-trx-filename integration.trx --results-directory ${{ github.workspace }}/TestResults
 
       - name: Publish test results
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         if: always()
         with:
           name: Test results
@@ -78,7 +78,7 @@ jobs:
       - name: Pack (validate packaging on every build)
         run: dotnet pack src/Hindsight.EntityFrameworkCore.PostgreSQL --no-build --configuration Release --output artifacts
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: nupkg
           path: artifacts/*.nupkg

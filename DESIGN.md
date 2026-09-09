@@ -25,8 +25,19 @@ custom `MigrationOperation`s wired into internals that break on minor releases.
 Why not a shared-type entity type with the same CLR type: EF Core forbids a CLR type being both a
 shared and a non-shared entity type.
 
-Revisit if: property-bag column mapping loses type fidelity for some Npgsql-specific column types
-(check `jsonb`, arrays, ranges, enums-as-strings, custom `ValueConverter`s).
+**Type fidelity — resolved by spike, 2026-09-10.** A property-bag column declared only by CLR type
+(`IndexerProperty(source.ClrType, name)`) loses the source's store type: `enum HasConversion<string>()`
+→ `integer`, `jsonb` → `text`, `numeric(18,4)` → `numeric`, `varchar(8)` → `text`. Arrays (`text[]`)
+survive because Npgsql infers them from the CLR type. The convention therefore **mirrors** each
+source property's facets onto the history property, using only public APIs:
+`GetColumnType()`, `GetValueConverter()` / `GetProviderClrType()`, `GetMaxLength()`, `IsUnicode()`,
+`GetPrecision()` / `GetScale()`. With mirroring the EF model and the PostgreSQL catalog match the main
+table exactly for every case above, including a custom `ValueConverter`. These getters only return the
+configured values once the source entity is fully configured, so the convention must run at/after
+model finalization. Covered by `PropertyBagTypeFidelitySpike` in `Hindsight.IntegrationTests`.
+
+Revisit if: a column kind still diverges after mirroring (ranges, composite/enum PG types,
+`[Column(TypeName)]` on an owned type).
 
 ## D3. Two history writers, same contract
 
@@ -114,4 +125,3 @@ Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the
   `Where`/`OrderBy`/`Select`/`First`? Time-box: three evenings; fallback is `FromSql`.
 - Does a `DropColumn` on the history table get through the differ in a way we can intercept
   without touching internals?
-- Property-bag + `HasConversion<string>()` enums: does the history column get the same store type?

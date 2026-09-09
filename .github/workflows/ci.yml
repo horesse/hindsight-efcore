@@ -63,7 +63,7 @@ jobs:
           --report-trx --report-trx-filename integration.trx --results-directory ${{ github.workspace }}/TestResults
 
       - name: Publish test results
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         if: always()
         with:
           name: Test results

@@ -2,8 +2,8 @@ Run the full definition-of-done check and report the result honestly.
 
 1. `dotnet build --configuration Release`
 2. `dotnet format --verify-no-changes`
-3. `dotnet test tests/Hindsight.Tests --configuration Release --no-build`
-4. `dotnet test tests/Hindsight.IntegrationTests --configuration Release --no-build` (needs Docker; if Docker is unavailable say so explicitly instead of skipping silently)
+3. `dotnet test --project tests/Hindsight.Tests --configuration Release --no-build`
+4. `dotnet test --project tests/Hindsight.IntegrationTests --configuration Release --no-build` (needs Docker; if Docker is unavailable say so explicitly instead of skipping silently)
 
 If any step fails: paste the relevant error output, state the most likely cause in one or two
 sentences, and propose the fix — do not apply it unless it is a formatting fix from step 2

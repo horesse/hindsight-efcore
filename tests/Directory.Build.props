@@ -8,15 +8,18 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <OutputType>Exe</OutputType>
+    <!-- xunit.v3 on Microsoft.Testing.Platform. .NET 10 SDK dropped the VSTest path for MTP-based
+         frameworks; global.json opts `dotnet test` into the MTP runner. -->
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
     <!-- Test code is allowed to be less strict than library code. -->
     <AnalysisLevel>latest-minimum</AnalysisLevel>
     <NoWarn>$(NoWarn);CS1591;CA1707;CA2007</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
-    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" />
   </ItemGroup>
 
   <ItemGroup>

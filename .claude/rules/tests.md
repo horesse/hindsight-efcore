@@ -17,6 +17,8 @@ paths:
   substrings of SQL.
 - A red test is information. Do not fix it by loosening the assertion, adding `Skip`, or switching
   the provider. If the behavior under test is actually wrong per `DESIGN.md`, say so and stop.
+- Every awaited call inside a test method receives `TestContext.Current.CancellationToken`
+  (xUnit1051 is an error). Fixture helpers take a `CancellationToken` parameter and pass it through.
 - Test names describe behavior: `Update_touching_only_excluded_property_writes_no_history_row`.
 - No `Thread.Sleep` / `Task.Delay` to "let time pass" — inject `TimeProvider` (Interceptor) or use
   distinct transactions (Trigger).

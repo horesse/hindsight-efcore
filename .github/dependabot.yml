@@ -8,7 +8,7 @@ updates:
       efcore:
         patterns: ["Microsoft.EntityFrameworkCore*", "Npgsql*"]
       tests:
-        patterns: ["xunit*", "Microsoft.NET.Test.Sdk", "Verify*", "Testcontainers*"]
+        patterns: ["xunit*", "Microsoft.Testing.*", "Verify*", "Testcontainers*"]
       tooling:
         patterns: ["MinVer", "Microsoft.CodeAnalysis*", "BenchmarkDotNet"]
   - package-ecosystem: github-actions

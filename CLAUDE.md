@@ -38,8 +38,8 @@ history table. Read `DESIGN.md` before touching anything non-trivial — it is t
 ```
 dotnet build                                   # warnings are errors
 dotnet format --verify-no-changes              # CI fails on drift; run `dotnet format` to fix
-dotnet test tests/Hindsight.Tests              # unit, seconds, no Docker
-dotnet test tests/Hindsight.IntegrationTests   # needs Docker; ~30s container start
+dotnet test --project tests/Hindsight.Tests    # unit, seconds, no Docker
+dotnet test --project tests/Hindsight.IntegrationTests   # needs Docker; ~30s container start
 dotnet docfx docs/docfx.json --serve           # docs preview
 cd samples/InsuranceSample && dotnet ef migrations add <Name>
 ```

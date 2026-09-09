@@ -28,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     # Testcontainers needs Docker; ubuntu-latest has it. Postgres image is pulled by the tests themselves.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # MinVer needs tags and history
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
@@ -51,22 +51,23 @@ jobs:
       - name: Format check
         run: dotnet format --no-restore --verify-no-changes --verbosity diagnostic
 
+      # Microsoft.Testing.Platform runner (global.json → test.runner). Options after the project are MTP's, not VSTest's.
       - name: Unit tests
         run: >
-          dotnet test tests/Hindsight.Tests --no-build --configuration Release
-          --logger "trx;LogFileName=unit.trx" --results-directory TestResults
+          dotnet test --project tests/Hindsight.Tests --no-build --configuration Release
+          --report-trx --report-trx-filename unit.trx --results-directory ${{ github.workspace }}/TestResults
 
       - name: Integration tests
         run: >
-          dotnet test tests/Hindsight.IntegrationTests --no-build --configuration Release
-          --logger "trx;LogFileName=integration.trx" --results-directory TestResults
+          dotnet test --project tests/Hindsight.IntegrationTests --no-build --configuration Release
+          --report-trx --report-trx-filename integration.trx --results-directory ${{ github.workspace }}/TestResults
 
       - name: Publish test results
-        uses: dorny/test-reporter@v1
+        uses: dorny/test-reporter@v2
         if: always()
         with:
           name: Test results
-          path: TestResults/*.trx
+          path: TestResults/**/*.trx
           reporter: dotnet-trx
 
       - name: Docs build (broken links / missing xrefs fail the PR)
@@ -77,7 +78,7 @@ jobs:
       - name: Pack (validate packaging on every build)
         run: dotnet pack src/Hindsight.EntityFrameworkCore.PostgreSQL --no-build --configuration Release --output artifacts
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: nupkg
           path: artifacts/*.nupkg

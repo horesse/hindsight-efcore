@@ -4,18 +4,26 @@ name: Release
 # MinVer derives the package version from that tag, so the release tag IS the version —
 # nothing to edit in csproj files.
 #
+# Publishing uses nuget.org Trusted Publishing (OIDC) — no long-lived API key anywhere.
 # One-time setup:
-#   1. Create an API key on nuget.org scoped to "Push new packages and package versions",
-#      glob pattern "Hindsight.*".
-#   2. Repository → Settings → Environments → create "nuget" (add "Required reviewers" if you
-#      want a manual gate) and put the key there as secret NUGET_API_KEY.
+#   1. nuget.org → your profile → Trusted Publishing → Add policy:
+#        Repository owner: horesse
+#        Repository:       hindsight-efcore
+#        Workflow file:    release.yml          (file name only, no path)
+#        Environment:      nuget                (must match `environment:` below)
+#   2. Repository → Settings → Environments → create "nuget"; add yourself as Required reviewer
+#      (manual gate before anything reaches nuget.org) and add secret NUGET_USER = your nuget.org
+#      profile name (not the e-mail).
+#   3. The policy for a public repo is active immediately; the first successful publish pins it
+#      to the repository id so a renamed/recreated repo can't reuse it.
 
 on:
   release:
     types: [published]
 
 permissions:
-  contents: write # to attach the .nupkg to the release
+  contents: write  # attach the .nupkg to the release
+  id-token: write  # GitHub OIDC token for nuget.org Trusted Publishing
 
 env:
   DOTNET_NOLOGO: true
@@ -59,10 +67,18 @@ jobs:
       - name: Show what will be pushed
         run: ls -la artifacts
 
+      # Exchanges the OIDC token for a temporary (1h, single-use) API key. Kept right before the
+      # push so the key can't expire in between.
+      - name: NuGet login (Trusted Publishing)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Push to nuget.org
         run: >
           dotnet nuget push "artifacts/*.nupkg"
-          --api-key "${{ secrets.NUGET_API_KEY }}"
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
 

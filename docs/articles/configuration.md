@@ -29,18 +29,35 @@ services.AddDbContext<AppDbContext>(o => o
 ```
 
 `UseHindsight()` turns on the convention that builds a history table into the model for every
-`IsTemporal()` entity. This is the form available today; the change-context and writer options below
-are planned.
+`IsTemporal()` entity, and installs the history writer that fills those tables on `SaveChanges`.
+
+## Choosing the history writer
+
+```csharp
+options.UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Interceptor));
+```
+
+`HistoryWriter.Interceptor` (the default, so the call above is optional) writes history from a
+`SaveChangesInterceptor` in the application, in the same transaction as the data change, with one
+timestamp per `SaveChanges` taken from the registered `TimeProvider`. `HistoryWriter.Trigger` — a
+database trigger that also captures `ExecuteUpdate` and raw SQL — is not implemented yet and throws
+`NotSupportedException`. See [History writers](history-writers.md) for the trade-offs and the exact
+mechanics.
+
+To make the timestamp deterministic in tests, register a `TimeProvider` on the application service
+provider (`services.AddSingleton<TimeProvider>(new FakeTimeProvider())`); the interceptor resolves it
+from there and falls back to `TimeProvider.System`.
 
 ## Context configuration
 
 > [!NOTE]
-> Not implemented yet. The shape below is the v1 target.
+> Not implemented yet. The shape below is the v1 target. The `changed_by`, `changed_by_name`,
+> `correlation_id`, `reason` and `extra` history columns are written `NULL` until it ships.
 
 ```csharp
 options.UseHindsight(h => h
     .WithChangeContext<MyChangeContextProvider>()
-    .UseHistoryWriter(HistoryWriter.Trigger));
+    .UseHistoryWriter(HistoryWriter.Interceptor));
 ```
 
 `WithChangeContext<T>` registers an `IChangeContextProvider`. The default provider reads

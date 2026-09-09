@@ -15,7 +15,10 @@
 ## Known trade-offs
 
 - `HistoryWriter.Interceptor` cannot see `ExecuteUpdate`, `ExecuteDelete`, raw SQL, or writes from other
-  processes. Use `HistoryWriter.Trigger` if that matters (it usually does).
+  processes. `HistoryWriter.Trigger` will cover that; it is not implemented yet, so today this is a
+  hard limitation, not a choice.
+- The change-context columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`)
+  are written `NULL` until the `IChangeContextProvider` ships.
 - One extra round-trip per transaction to push the change context.
 - History tables grow without bound. Partitioning by `valid_from` and retention are v2; the schema is
   chosen so they can be added without migration of existing data.

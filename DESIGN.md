@@ -104,7 +104,8 @@ Package `Hindsight.EntityFrameworkCore.PostgreSQL`, namespace `Hindsight`. `Chro
 
 ## D11. Versioning and release
 
-MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only path to nuget.org.
+MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only path to nuget.org;
+publishing uses nuget.org Trusted Publishing (OIDC) behind a reviewed `nuget` environment — no API key is stored.
 Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the public surface.
 
 ## Open questions (resolve in the spike, then move up)

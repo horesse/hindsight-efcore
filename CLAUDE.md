@@ -68,6 +68,11 @@ DESIGN.md                                       decisions D1–D11 + open questi
 - Annotation names live in `HindsightAnnotationNames`; never string-literal them elsewhere.
 - Column and table names are snake_case in SQL (`valid_from`, `policies_history`).
 - Commits: Conventional Commits, English, atomic. `feat(query): translate AsOf root replacement`.
+  PR titles follow the same format — CI lints them (`.github/workflows/pr-title.yml` has the closed
+  list of types and scopes) and the squash-merge uses the title as the commit message.
+- A weekly canary builds against EF Core / Npgsql previews (`efcore-preview.yml`). An open issue
+  labelled `efcore-preview` means an upcoming EF Core release breaks us — read it before touching
+  anything in the affected area.
 - Code, XML docs, README, docs/ — English. Explanations to the maintainer — Russian.
 - Tests: `MethodOrScenario_Condition_Expectation` or a sentence in the `[Fact]` name; one behavior
   per test; arrange with the sample `Policy` entity unless the scenario needs something else.

@@ -1,0 +1,94 @@
+name: EF Core preview canary
+
+# Weekly: build and test against the latest *prerelease* EF Core + Npgsql provider from nuget.org
+# (and EF Core daily builds from the dotnet-eng feed). Hindsight rides close to EF Core's public
+# extension points; this is how we learn about a break before users do.
+#
+# Failure opens (or updates) one issue labelled `efcore-preview`. It never blocks PRs.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      version_pattern:
+        description: "Floating version for Microsoft.EntityFrameworkCore.* and Npgsql.EntityFrameworkCore.PostgreSQL"
+        default: "11.0.0-*"
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  VERSION_PATTERN: ${{ github.event.inputs.version_pattern || '11.0.0-*' }}
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      # Daily EF Core builds live on the dnceng feed; Npgsql previews are on nuget.org.
+      - name: Add dotnet-eng feed
+        run: |
+          cat > nuget.config <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              <add key="dotnet11" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet11/nuget/v3/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+
+      - name: Float EF Core / Npgsql versions to ${{ env.VERSION_PATTERN }}
+        run: |
+          sed -i -E \
+            "s#(Include=\"(Microsoft\.EntityFrameworkCore(\.[A-Za-z]+)?|Npgsql\.EntityFrameworkCore\.PostgreSQL)\" Version=\")[^\"]+#\1${VERSION_PATTERN}#g" \
+            Directory.Packages.props
+          grep -E "EntityFrameworkCore|Npgsql" Directory.Packages.props
+
+      - name: Restore
+        id: restore
+        run: dotnet restore
+
+      - name: Resolved versions
+        run: dotnet list src/Hindsight.EntityFrameworkCore.PostgreSQL package | grep -E "EntityFrameworkCore|Npgsql" || true
+
+      - name: Build
+        id: build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        id: test
+        run: dotnet test --no-build --configuration Release --solution Hindsight.slnx
+
+      - name: Open or update issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          STEP="restore"
+          [ "${{ steps.restore.outcome }}" = "success" ] && STEP="build"
+          [ "${{ steps.build.outcome }}" = "success" ] && STEP="test"
+          TITLE="EF Core preview canary failed at ${STEP} (${VERSION_PATTERN})"
+          BODY="Weekly canary against \`${VERSION_PATTERN}\` failed at **${STEP}**.
+
+          Run: ${RUN_URL}
+
+          Check the resolved versions in the run log, then decide: adapt now, or pin and note in DESIGN.md."
+          EXISTING=$(gh issue list --label efcore-preview --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label efcore-preview
+          fi

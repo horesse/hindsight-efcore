@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a capability
+labels: ["kind:feature"]
+body:
+  - type: checkboxes
+    id: nongoals
+    attributes:
+      label: Before you start
+      options:
+        - label: I checked the non-goals in README.md and DESIGN.md and this is not one of them (or I explain below why it should stop being one)
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you cannot do today, with a concrete example from your domain.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behavior
+      render: csharp
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

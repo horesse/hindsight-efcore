@@ -1,3 +1,4 @@
+using Hindsight;
 using InsuranceSample;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +9,7 @@ var connectionString = Environment.GetEnvironmentVariable("HINDSIGHT_SAMPLE_CS")
 
 var options = new DbContextOptionsBuilder<InsuranceDbContext>()
     .UseNpgsql(connectionString)
+    .UseHindsight()
     .Options;
 
 await using var db = new InsuranceDbContext(options);

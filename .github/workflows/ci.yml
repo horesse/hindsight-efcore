@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     # Testcontainers needs Docker; ubuntu-latest has it. Postgres image is pulled by the tests themselves.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # MinVer needs tags and history
 

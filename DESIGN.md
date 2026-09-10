@@ -116,7 +116,9 @@ row and writes a **tombstone**: `operation = 3`, `valid_from = valid_to = @ts` �
 It never satisfies an `AsOf` predicate (`valid_from <= t AND valid_to > t`), so a deleted entity has
 zero open versions, but the row still records *when* the delete happened and (once the change-context
 provider ships) *who* did it, which a bare "close the last version" would lose and which the Trigger
-writer's `AFTER DELETE` would record anyway.
+writer's `AFTER DELETE` would record anyway. `AllVersions()` also excludes it (`operation <> 3`): it
+carries the pre-delete column values but an empty interval, so it is a delete marker, not a state
+version (D12).
 
 ## D6. Schema evolution
 
@@ -152,7 +154,7 @@ MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only
 publishing uses nuget.org Trusted Publishing (OIDC) behind a reviewed `nuget` environment — no API key is stored.
 Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the public surface.
 
-## D12. `AsOf` translates by query-root replacement — resolved by spike, 2026-09-10
+## D12. `AsOf` / `AllVersions` translate by query-root replacement — resolved by spike, 2026-09-10
 
 `queryable.AsOf(at)` is a marker method. A public `IQueryExpressionInterceptor.QueryCompilationStarting`
 hook (EF Core 10, no `*.Internal`) rewrites the source entity's query root into
@@ -160,6 +162,22 @@ hook (EF Core 10, no `*.Internal`) rewrites the source entity's query root into
 over the property-bag history entity type, found via the `Hindsight:HistoryEntityType` annotation.
 The instant is a closure member access, not `Expression.Constant`, so EF parameterises it and the
 query cache is not busted per timestamp.
+
+**`AllVersions()` uses the same mechanism (added 2026-09-10).** Same marker + hook + root
+replacement, differing only in how the history source is shaped: no period predicate, and
+`historyRoot.Where(operation <> 3).OrderByDescending(valid_from).Select(h => new Policy { ... }).AsNoTracking()`.
+The projection, the `AsNoTracking`, and every guard (first operator, non-temporal, `Include`,
+`AsTracking`, TPH, owned/complex) are shared with `AsOf` in `HistoryQueryRootRewriter`.
+- **Tombstone excluded (`operation <> 3`).** The delete tombstone (D5) carries the last column
+  values before the delete but an empty interval `[ts, ts)`. Returned as a "version" it would be a
+  data-duplicate of the final real version with `ValidFrom == ValidTo` — meaningless as a state
+  snapshot and misleading in a timeline. So `AllVersions()` returns only inserts and updates; a
+  deleted entity's timeline ends at the version that was open when it was deleted. The *when* / *who*
+  of the delete is `History<T>()`'s job.
+- **Default order `valid_from DESC`, baked into the rewrite.** `AllVersions()` returns
+  `IQueryable<T>` (not `IOrderedQueryable<T>`), so a caller cannot append a bare `ThenBy`; a caller
+  `OrderBy` / `OrderByDescending` replaces the default (standard LINQ — EF drops the overridden
+  `ORDER BY`), a trailing `ThenBy` keeps newest-first primary.
 
 **The spike question — does root replacement survive composition with `Where`/`OrderBy`/`Select`/
 `First`? — is answered yes.** `db.Policies.AsOf(t).Where(p => p.Premium > 0).OrderBy(p => p.Number)
@@ -170,23 +188,31 @@ query cache is not busted per timestamp.
 at `valid_from`; deleted-entity tombstone never matched; composite key; enum-as-string / `jsonb` /
 `text[]` projected back into the entity; `Concat` of two `AsOf`; `AsOf` on both sides of a join;
 `AsOf` inside a `Contains` subquery — all translate. The canonical SQL has a Verify snapshot.
+`AllVersionsQueryTests` covers the same ground for `AllVersions()`: N versions returned newest
+first; `Where` / `Select` / `Count` composition; the caller `OrderBy` replacing the default order;
+the tombstone excluded after a delete; composite key; enum / `jsonb` / `text[]` round-trip;
+`Concat` of `AllVersions()` and `AsOf()` in one tree; and every guard. Its canonical SQL
+(`… WHERE operation <> 3 AND … ORDER BY valid_from DESC`) has a Verify snapshot. The shared rewrite
+lives in `HistoryQueryRootRewriter`; the marker scan and Include/AsTracking rejection in
+`HindsightQueryExpressionInterceptor` recognise both markers.
 
 `FromSql` (the fallback named below) also composes, but stays the fallback: it forces every mapped
 property into the `SELECT` list, so an `Exclude()`-d non-nullable column needs a sentinel value in
 the SQL — meaningless data in a real column, which rule 2 discourages.
 
-Two things root replacement does not give for free, both handled in the rewrite:
+Two things root replacement does not give for free, both handled in the rewrite (for `AsOf` and
+`AllVersions` alike):
 - **No-tracking (D7).** A `Select` that materialises a mapped entity with all key properties set is
-  tracked by EF, so the rewrite appends `AsNoTracking()`. `AsOf(...).AsTracking()` throws — the hook
+  tracked by EF, so the rewrite appends `AsNoTracking()`. `.AsTracking()` throws — the hook
   rejects an explicit tracking operator rather than let it override.
-- **`AsOf` + `Include` (D8).** EF would throw its own `InvalidOperationException` about `Include`
-  after `Select`; the hook detects `Include` / `ThenInclude` next to `AsOf` first and throws
-  `NotSupportedException` naming D8.
+- **`Include` (D8).** EF would throw its own `InvalidOperationException` about `Include`
+  after `Select`; the hook detects `Include` / `ThenInclude` next to a history marker first and
+  throws `NotSupportedException` naming D8.
 
-Further rules the hook enforces: `AsOf` must be the first operator on the query (else
-`InvalidOperationException` — move it before `Where`/`OrderBy`/…); `AsOf` on a non-temporal entity
-throws `InvalidOperationException` naming the entity; `AsOf` on an inheritance hierarchy (D9) or an
-entity with owned / complex members throws `NotSupportedException` (those column sets are not
+Further rules the hook enforces (both markers): the marker must be the first operator on the query
+(else `InvalidOperationException` — move it before `Where`/`OrderBy`/…); on a non-temporal entity it
+throws `InvalidOperationException` naming the entity; on an inheritance hierarchy (D9) or an
+entity with owned / complex members it throws `NotSupportedException` (those column sets are not
 reconstructable from the history table — use `FromSql`). Not done here: blocking a re-attached
 snapshot from being saved (D7 sentence 2) — the result is detached and no-tracking, but nothing stops
 `Update` + `SaveChanges`.

@@ -116,6 +116,12 @@ These apply to `AsOf`, `AllVersions` and `History<T>`.
 - **Always no-tracking.** Results are detached snapshots — the change tracker is untouched.
   `AsOf(...).AsTracking()` / `AllVersions().AsTracking()` / `History<Policy>().AsTracking()` throws: a
   historical row is not something you edit and save back.
+- **Read-only — enforced.** Re-attaching a snapshot (`db.Update(snapshot)`, `db.Attach(...)`,
+  `db.Remove(...)`, `db.Entry(...).State = ...`) and calling `SaveChanges` throws
+  `InvalidOperationException`: it would write a past snapshot back as the current version and generate
+  spurious history. This holds for the entity from `AsOf` / `AllVersions` and for `Version<T>.Entity`
+  from `History<T>`. To roll a value back, copy it onto a fresh instance — or onto one from
+  `DbSet.Find()` / a normal query — and save that.
 - **No `Include`.** `AsOf(...).Include(...)` / `AllVersions().Include(...)` /
   `History<Policy>().Include(...)` throws `NotSupportedException`. Reading a related entity from
   history is an interval join on two periods; v1 refuses rather than return a result that looks right

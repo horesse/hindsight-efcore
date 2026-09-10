@@ -7,14 +7,19 @@ using Microsoft.EntityFrameworkCore.Query;
 namespace Hindsight.Query;
 
 /// <summary>
-/// Rewrites every <c>AsOf(...)</c> / <c>AllVersions()</c> marker call in a query tree into a real
-/// query over the entity's property-bag history entity type. Both markers share the same shape —
-/// <c>historySource.Select(h =&gt; new TEntity { ... }).AsNoTracking()</c> — and differ only in how the
-/// history source is filtered and ordered:
+/// Rewrites every <c>AsOf(...)</c> / <c>AllVersions()</c> / <c>History&lt;T&gt;()</c> marker call in a
+/// query tree into a real query over the entity's property-bag history entity type. All three end in
+/// <c>historySource.Select(h =&gt; …).AsNoTracking()</c> and differ in how the history source is
+/// filtered and ordered and in what the projection produces:
 /// <list type="bullet">
-/// <item><c>AsOf</c>: <c>history.Where(valid_from &lt;= @asOf &amp;&amp; valid_to &gt; @asOf)</c>.</item>
+/// <item><c>AsOf</c>: <c>history.Where(valid_from &lt;= @asOf &amp;&amp; valid_to &gt; @asOf)</c>,
+/// projected to <c>new TEntity { … }</c>.</item>
 /// <item><c>AllVersions</c>: <c>history.Where(operation &lt;&gt; 3).OrderByDescending(valid_from)</c>
-/// (no period predicate; the <c>delete</c> tombstone is not a state version).</item>
+/// (no period predicate; the <c>delete</c> tombstone is not a state version), projected to
+/// <c>new TEntity { … }</c>.</item>
+/// <item><c>History&lt;T&gt;</c>: <c>history.OrderByDescending(valid_from).ThenByDescending(history_id)</c>
+/// (no filter at all — the tombstone is the delete audit), projected to
+/// <c>new Version&lt;TEntity&gt; { Entity = new TEntity { … }, ValidFrom = …, Operation = …, … }</c>.</item>
 /// </list>
 /// The operators the caller put after the marker sit on top of that and translate normally
 /// (DESIGN.md D12). Uses only public EF Core API — no <c>Microsoft.EntityFrameworkCore.*.Internal</c>
@@ -32,6 +37,10 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 
     private static readonly MethodInfo _queryableOrderByDescending = typeof(Queryable).GetMethods()
         .Single(m => m.Name == nameof(Queryable.OrderByDescending)
+            && m.GetParameters().Length == 2);
+
+    private static readonly MethodInfo _queryableThenByDescending = typeof(Queryable).GetMethods()
+        .Single(m => m.Name == nameof(Queryable.ThenByDescending)
             && m.GetParameters().Length == 2);
 
     private static readonly MethodInfo _queryableSelect = typeof(Queryable).GetMethods()
@@ -65,6 +74,11 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             {
                 return RewriteMarker(node, HistoryReadKind.AllVersions);
             }
+
+            if (definition == HindsightQueryableExtensions.HistoryMethod)
+            {
+                return RewriteMarker(node, HistoryReadKind.History);
+            }
         }
 
         return base.VisitMethodCall(node);
@@ -72,7 +86,12 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 
     private MethodCallExpression RewriteMarker(MethodCallExpression node, HistoryReadKind kind)
     {
-        var operatorName = kind == HistoryReadKind.AsOf ? "AsOf()" : "AllVersions()";
+        var operatorName = kind switch
+        {
+            HistoryReadKind.AsOf => "AsOf()",
+            HistoryReadKind.AllVersions => "AllVersions()",
+            _ => "History<T>()",
+        };
         var visitedSource = Visit(node.Arguments[0]);
         var entityClrType = node.Method.GetGenericArguments()[0];
 
@@ -125,20 +144,73 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName);
 
         var historyRoot = new EntityQueryRootExpression(historyEntityType);
-        var historySource = kind == HistoryReadKind.AsOf
-            ? AsOfSource(historyRoot, bagType, periodStart, periodEnd, node.Arguments[1])
-            : AllVersionsSource(historyRoot, bagType, periodStart);
+        var historySource = kind switch
+        {
+            HistoryReadKind.AsOf => AsOfSource(historyRoot, bagType, periodStart, periodEnd, node.Arguments[1]),
+            HistoryReadKind.AllVersions => AllVersionsSource(historyRoot, bagType, periodStart),
+            _ => HistorySource(historyRoot, bagType, periodStart),
+        };
 
         // h => new TEntity { Prop = EF.Property<TProp>(h, "column"), ... }
         var projectionParam = Expression.Parameter(bagType, "h");
-        var projection = Expression.Lambda(
-            Expression.MemberInit(Expression.New(entityClrType), BuildBindings(sourceEntityType, projectionParam, operatorName)),
-            projectionParam);
-        var projected = Expression.Call(
-            _queryableSelect.MakeGenericMethod(bagType, entityClrType), historySource, Expression.Quote(projection));
+        var entityInit = Expression.MemberInit(
+            Expression.New(entityClrType), BuildBindings(sourceEntityType, projectionParam, operatorName));
 
-        // D7: a Select that materialises a mapped entity is tracked unless this is forced.
-        return Expression.Call(_asNoTracking.MakeGenericMethod(entityClrType), projected);
+        // AsOf / AllVersions project the entity itself; History<T> wraps it in Version<TEntity> and
+        // adds the period + change-context columns as top-level members.
+        var (resultClrType, projectionBody) = kind == HistoryReadKind.History
+            ? WrapInVersion(entityClrType, entityInit, projectionParam, periodStart, periodEnd)
+            : (entityClrType, (Expression)entityInit);
+
+        var projection = Expression.Lambda(projectionBody, projectionParam);
+        var projected = Expression.Call(
+            _queryableSelect.MakeGenericMethod(bagType, resultClrType), historySource, Expression.Quote(projection));
+
+        // D7: a Select that materialises a mapped entity (or one nested in Version<TEntity>) is tracked
+        // unless this is forced.
+        return Expression.Call(_asNoTracking.MakeGenericMethod(resultClrType), projected);
+    }
+
+    // h => new Version<TEntity>
+    // {
+    //     Entity = new TEntity { ... },
+    //     ValidFrom = (DateTimeOffset)EF.Property<DateTime>(h, "valid_from"),
+    //     ValidTo = (DateTimeOffset)EF.Property<DateTime>(h, "valid_to"),
+    //     Operation = (VersionOperation)EF.Property<short>(h, "operation"),
+    //     ChangedBy = EF.Property<string>(h, "changed_by"), ... Extra = EF.Property<string>(h, "extra"),
+    // }
+    private static (Type ResultClrType, Expression Body) WrapInVersion(
+        Type entityClrType,
+        Expression entityInit,
+        ParameterExpression bag,
+        string periodStart,
+        string periodEnd)
+    {
+        var versionClrType = typeof(Version<>).MakeGenericType(entityClrType);
+
+        MemberBinding Bind(string member, Expression value)
+            => Expression.Bind(versionClrType.GetProperty(member)!, value);
+
+        Expression ToDateTimeOffset(string column)
+            => Expression.Convert(Property(bag, typeof(DateTime), column), typeof(DateTimeOffset));
+
+        var bindings = new List<MemberBinding>
+        {
+            Bind(nameof(Version<object>.Entity), entityInit),
+            Bind(nameof(Version<object>.ValidFrom), ToDateTimeOffset(periodStart)),
+            Bind(nameof(Version<object>.ValidTo), ToDateTimeOffset(periodEnd)),
+            Bind(
+                nameof(Version<object>.Operation),
+                Expression.Convert(
+                    Property(bag, typeof(short), HindsightHistoryColumns.Operation), typeof(VersionOperation))),
+            Bind(nameof(Version<object>.ChangedBy), Property(bag, typeof(string), HindsightHistoryColumns.ChangedBy)),
+            Bind(nameof(Version<object>.ChangedByName), Property(bag, typeof(string), HindsightHistoryColumns.ChangedByName)),
+            Bind(nameof(Version<object>.CorrelationId), Property(bag, typeof(string), HindsightHistoryColumns.CorrelationId)),
+            Bind(nameof(Version<object>.Reason), Property(bag, typeof(string), HindsightHistoryColumns.Reason)),
+            Bind(nameof(Version<object>.Extra), Property(bag, typeof(string), HindsightHistoryColumns.Extra)),
+        };
+
+        return (versionClrType, Expression.MemberInit(Expression.New(versionClrType), bindings));
     }
 
     // history.Where(EF.Property<DateTime>(h, "valid_from") <= @asOf && EF.Property<DateTime>(h, "valid_to") > @asOf)
@@ -182,6 +254,33 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             _queryableOrderByDescending.MakeGenericMethod(bagType, typeof(DateTime)),
             filtered,
             Expression.Quote(validFrom));
+    }
+
+    // history.OrderByDescending(h => EF.Property<DateTime>(h, "valid_from"))
+    //        .ThenByDescending(h => EF.Property<long>(h, "history_id"))
+    // No filter: History<T>() returns every stored row, tombstone included — it is the delete audit
+    // (DESIGN.md D5). history_id is the identity surrogate key, so the secondary sort is a stable
+    // total order (rows written in one transaction share nothing else that separates them).
+    private static MethodCallExpression HistorySource(
+        EntityQueryRootExpression historyRoot,
+        Type bagType,
+        string periodStart)
+    {
+        var orderParam = Expression.Parameter(bagType, "h");
+        var validFrom = Expression.Lambda(Property(orderParam, typeof(DateTime), periodStart), orderParam);
+        var ordered = Expression.Call(
+            _queryableOrderByDescending.MakeGenericMethod(bagType, typeof(DateTime)),
+            historyRoot,
+            Expression.Quote(validFrom));
+
+        var thenParam = Expression.Parameter(bagType, "h");
+        var historyId = Expression.Lambda(
+            Property(thenParam, typeof(long), HindsightHistoryColumns.HistoryId), thenParam);
+
+        return Expression.Call(
+            _queryableThenByDescending.MakeGenericMethod(bagType, typeof(long)),
+            ordered,
+            Expression.Quote(historyId));
     }
 
     private static List<MemberBinding> BuildBindings(IEntityType sourceEntityType, ParameterExpression bag, string operatorName)
@@ -228,5 +327,6 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
     {
         AsOf,
         AllVersions,
+        History,
     }
 }

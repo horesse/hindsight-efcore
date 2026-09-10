@@ -78,7 +78,7 @@ await db.History<Policy>().Where(v => ...).ToListAsync();   // versions with met
 ```
 
 Historical queries are always no-tracking; treat the results as read-only snapshots.
-`AsOf` and `AllVersions` are implemented; `History<T>` (versions with metadata) is next.
+`AsOf`, `AllVersions` and `History<T>` are implemented.
 
 ## Two ways to write history
 

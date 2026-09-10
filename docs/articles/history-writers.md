@@ -130,8 +130,68 @@ and the trigger reads each back with `current_setting('hindsight.changed_by', tr
 a missing value return `NULL` rather than error). If the caller has no transaction open, Hindsight
 opens one for that `SaveChanges` — EF Core runs a single-statement save without a transaction by
 default, and a transaction-local setting needs one — and commits it with the data. `db.WithReason("…")`
-works the same as in interceptor mode. This costs one extra round-trip per `SaveChanges`; the
-repository benchmarks measure it.
+works the same as in interceptor mode. This costs one extra round-trip per `SaveChanges` — about
+1.4 ms on a 100-row update in the [benchmarks](#benchmarks) below; the interceptor, which already
+does per-row round-trips, shows no measurable change from the same provider.
 
 Bulk writes (`ExecuteUpdate` / `ExecuteDelete`) and raw SQL still get full history rows — the trigger
 sees them — but with `NULL` context columns, because nothing pushed a `ChangeContext` for them.
+
+## Benchmarks
+
+From `benchmarks/Hindsight.Benchmarks` (BenchmarkDotNet). The entry point starts one PostgreSQL 17
+container; each case creates its own database and measures a single `SaveChanges` per iteration, with
+`[IterationSetup]` truncating and re-seeding between iterations (not counted). `None` is plain EF Core
+with no history writer — the baseline.
+
+Measured on an AMD Ryzen 7 7800X3D, Windows 11, .NET SDK 10.0.400, PostgreSQL 17 in Docker.
+**Your numbers will differ** — compare the columns to each other, not to your hardware. Re-run with
+`dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'`.
+
+### Insert, update, delete
+
+Mean wall-clock time for one `SaveChanges` over N temporal entities:
+
+| operation | rows | None | Interceptor | Trigger |
+|---|--:|--:|--:|--:|
+| insert | 1 | 1.0 ms | 3.5 ms | 1.6 ms |
+| insert | 100 | 8.8 ms | 72 ms | 12 ms |
+| insert | 1000 | 64 ms | 597 ms | 81 ms |
+| update | 1 | 0.7 ms | 3.5 ms | 1.0 ms |
+| update | 100 | 8.3 ms | 119 ms | 14 ms |
+| delete | 1 | 0.7 ms | 3.5 ms | 1.0 ms |
+| delete | 100 | 6.5 ms | 120 ms | 12 ms |
+
+Managed allocations for the same calls:
+
+| operation | rows | None | Interceptor | Trigger |
+|---|--:|--:|--:|--:|
+| insert | 100 | 855 KB | 1695 KB | 960 KB |
+| insert | 1000 | 8221 KB | 16730 KB | 9214 KB |
+| update | 100 | 499 KB | 1532 KB | 592 KB |
+| delete | 100 | 373 KB | 1400 KB | 478 KB |
+
+- **Trigger** stays within roughly 1.3–1.8× of plain EF Core. The database writes the history row
+  inside the same transaction, so the application only pays for the change-context `set_config` (if
+  any) and, when the caller opened none, a transaction.
+- **Interceptor** runs one `UPDATE …_history` + one `INSERT …_history` round-trip **per row** in
+  `SavedChanges`. At one row that is a couple of milliseconds; at 100 rows it is 8–18× the baseline
+  depending on the operation; at 1000 rows it dominates. Batch-writing temporal entities is where the
+  two writers diverge most.
+- The single-row rows sit close to the container round-trip noise floor — read the 100- and
+  1000-row rows for the trend.
+
+### Change context cost
+
+Same 100-row update, with and without an <xref:Hindsight.IChangeContextProvider> (a fixed provider
+that returns a constant <xref:Hindsight.ChangeContext> with no I/O, so this is the plumbing cost
+only):
+
+| writer | without | with | delta |
+|---|--:|--:|--:|
+| Interceptor | 121 ms | 122 ms | within noise |
+| Trigger | 13.7 ms | 15.1 ms | +1.4 ms, +24 KB |
+
+For **Trigger** the delta is the one extra `set_config` round-trip per `SaveChanges`. For
+**Interceptor** the provider call and the five extra columns on each history `INSERT` disappear into
+the per-row round-trip cost that is already there.

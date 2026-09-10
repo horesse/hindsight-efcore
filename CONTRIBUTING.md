@@ -15,6 +15,17 @@ dotnet format --verify-no-changes              # CI fails on formatting drift
 dotnet docfx docs/docfx.json --serve            # docs at http://localhost:8080
 ```
 
+## Benchmarks
+
+```
+dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'
+```
+
+Needs Docker: the entry point starts one PostgreSQL container for the whole run and every benchmark
+creates its own database on it. Not run in CI — it is manual, and the numbers in `README.md` and
+`docs/articles/history-writers.md` are refreshed by hand when the writers change. Narrow a run with
+`--filter '*Insert*'`.
+
 ## Conventions
 
 - Branch from `master`, open a PR. CI must be green.

@@ -58,11 +58,19 @@ never reach a `SaveChangesInterceptor`, so they write no history (DESIGN.md D4).
 need the trigger writer — which is not available yet. Until then, route changes to temporal entities
 through tracked `SaveChanges`.
 
-### Change context is not populated yet
+### Change context
 
-The `changed_by`, `changed_by_name`, `correlation_id`, `reason` and `extra` columns exist on every
-history table but the interceptor writes them `NULL`. The `IChangeContextProvider` that fills them is
-a separate change; this page will describe it when it ships.
+The `changed_by`, `changed_by_name`, `correlation_id`, `reason` and `extra` columns are filled from an
+<xref:Hindsight.IChangeContextProvider> when one is registered with
+`UseHindsight(h => h.WithChangeContext<T>())`; without a provider they are written `NULL` and
+`SaveChanges` still succeeds. The interceptor calls the provider **once per `SaveChanges`** — in
+`SavingChanges`, alongside the timestamp, not once per row — and stamps the returned
+<xref:Hindsight.ChangeContext> onto every history row of that call: the `INSERT` of each new version
+carries it, while the `UPDATE` that closes the previous version leaves that row's original context
+untouched. `db.WithReason("…")` opens a scope that overrides `ChangeContext.Reason` for the
+`SaveChanges` calls inside it. A provider exception propagates and rolls the transaction back. See
+[Configuration → Context configuration](configuration.md#context-configuration) for the provider
+contract and a worked example.
 
 ## The trigger writer (planned)
 

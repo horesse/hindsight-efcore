@@ -25,14 +25,27 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
     private HindsightOptionsExtension(HindsightOptionsExtension copyFrom)
     {
         HistoryWriter = copyFrom.HistoryWriter;
+        ChangeContextProviderType = copyFrom.ChangeContextProviderType;
     }
 
     public HistoryWriter HistoryWriter { get; private set; } = HistoryWriter.Interceptor;
+
+    /// <summary>
+    /// The <see cref="IChangeContextProvider"/> implementation type registered with
+    /// <see cref="HindsightOptionsBuilder.WithChangeContext{TProvider}"/>, or <see langword="null"/>
+    /// when none was registered (history context columns are then written <see langword="null"/>).
+    /// The <see cref="Writers.HistoryWriterInterceptor"/> resolves it per <c>SaveChanges</c> from the
+    /// application service provider, falling back to a parameterless constructor.
+    /// </summary>
+    public Type? ChangeContextProviderType { get; private set; }
 
     public DbContextOptionsExtensionInfo Info => _info ??= new ExtensionInfo(this);
 
     public HindsightOptionsExtension WithHistoryWriter(HistoryWriter historyWriter)
         => new(this) { HistoryWriter = historyWriter };
+
+    public HindsightOptionsExtension WithChangeContextProvider(Type providerType)
+        => new(this) { ChangeContextProviderType = providerType };
 
     public void ApplyServices(IServiceCollection services)
     {
@@ -55,17 +68,29 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
 
         public override bool IsDatabaseProvider => false;
 
-        public override string LogFragment => $"using Hindsight (history writer: {Extension.HistoryWriter}) ";
+        public override string LogFragment
+        {
+            get
+            {
+                var provider = Extension.ChangeContextProviderType?.Name ?? "none";
+                return $"using Hindsight (history writer: {Extension.HistoryWriter}, change context: {provider}) ";
+            }
+        }
 
-        public override int GetServiceProviderHashCode() => (int)Extension.HistoryWriter;
+        public override int GetServiceProviderHashCode()
+            => HashCode.Combine(Extension.HistoryWriter, Extension.ChangeContextProviderType);
 
         public override bool ShouldUseSameServiceProvider(DbContextOptionsExtensionInfo other)
-            => other is ExtensionInfo info && info.Extension.HistoryWriter == Extension.HistoryWriter;
+            => other is ExtensionInfo info
+                && info.Extension.HistoryWriter == Extension.HistoryWriter
+                && info.Extension.ChangeContextProviderType == Extension.ChangeContextProviderType;
 
         public override void PopulateDebugInfo(IDictionary<string, string> debugInfo)
         {
             ArgumentNullException.ThrowIfNull(debugInfo);
             debugInfo["Hindsight:HistoryWriter"] = Extension.HistoryWriter.ToString();
+            debugInfo["Hindsight:ChangeContextProvider"] =
+                Extension.ChangeContextProviderType?.FullName ?? "none";
         }
     }
 }

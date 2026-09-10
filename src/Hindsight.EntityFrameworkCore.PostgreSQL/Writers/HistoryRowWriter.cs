@@ -20,13 +20,16 @@ internal static class HistoryRowWriter
     internal const string Infinity = "'infinity'::timestamptz";
 
     public static void Write(
-        DbContext context, DateTimeOffset timestamp, IReadOnlyList<PendingHistoryRow> rows)
+        DbContext context,
+        DateTimeOffset timestamp,
+        ChangeContext changeContext,
+        IReadOnlyList<PendingHistoryRow> rows)
     {
         var (connection, transaction, sqlHelper) = Resolve(context);
 
         foreach (var row in rows)
         {
-            foreach (var statement in BuildStatements(row, sqlHelper, timestamp))
+            foreach (var statement in BuildStatements(row, sqlHelper, timestamp, changeContext))
             {
                 using var command = connection.CreateCommand();
                 command.Transaction = transaction;
@@ -39,6 +42,7 @@ internal static class HistoryRowWriter
     public static async Task WriteAsync(
         DbContext context,
         DateTimeOffset timestamp,
+        ChangeContext changeContext,
         IReadOnlyList<PendingHistoryRow> rows,
         CancellationToken cancellationToken)
     {
@@ -46,7 +50,7 @@ internal static class HistoryRowWriter
 
         foreach (var row in rows)
         {
-            foreach (var statement in BuildStatements(row, sqlHelper, timestamp))
+            foreach (var statement in BuildStatements(row, sqlHelper, timestamp, changeContext))
             {
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
@@ -62,8 +66,23 @@ internal static class HistoryRowWriter
             context.Database.CurrentTransaction?.GetDbTransaction(),
             context.GetService<ISqlGenerationHelper>());
 
+    // The change-context columns, in a fixed order, paired with their ChangeContext member. Written
+    // only on the INSERT of the new version (DESIGN.md D5); the "close previous version" UPDATE leaves
+    // the earlier row's context untouched.
+    private static IEnumerable<KeyValuePair<string, string?>> ContextColumns(ChangeContext changeContext)
+    {
+        yield return new(HindsightHistoryColumns.ChangedBy, changeContext.UserId);
+        yield return new(HindsightHistoryColumns.ChangedByName, changeContext.UserName);
+        yield return new(HindsightHistoryColumns.CorrelationId, changeContext.CorrelationId);
+        yield return new(HindsightHistoryColumns.Reason, changeContext.Reason);
+        yield return new(HindsightHistoryColumns.Extra, changeContext.Extra);
+    }
+
     private static IEnumerable<HistoryStatement> BuildStatements(
-        PendingHistoryRow row, ISqlGenerationHelper sqlHelper, DateTimeOffset timestamp)
+        PendingHistoryRow row,
+        ISqlGenerationHelper sqlHelper,
+        DateTimeOffset timestamp,
+        ChangeContext changeContext)
     {
         var table = sqlHelper.DelimitIdentifier(row.HistoryEntityType.GetTableName()!, row.HistoryEntityType.GetSchema());
         var validFrom = sqlHelper.DelimitIdentifier(row.PeriodStartColumn);
@@ -84,9 +103,10 @@ internal static class HistoryRowWriter
             _ => throw new UnreachableException(),
         };
 
-        var columns = new List<string>(row.VersionedColumns.Count);
-        var placeholders = new List<string>(row.VersionedColumns.Count);
-        var parameters = new List<HistoryParameter>(row.VersionedColumns.Count + 2);
+        const int extraColumnCount = 7; // 5 context columns + operation + timestamp
+        var columns = new List<string>(row.VersionedColumns.Count + 5);
+        var placeholders = new List<string>(row.VersionedColumns.Count + 5);
+        var parameters = new List<HistoryParameter>(row.VersionedColumns.Count + extraColumnCount);
 
         var index = 0;
         foreach (var (column, _) in row.VersionedColumns)
@@ -98,6 +118,18 @@ internal static class HistoryRowWriter
                 name,
                 row.Values.GetValueOrDefault(column),
                 row.HistoryEntityType.FindProperty(column)!.GetRelationalTypeMapping()));
+        }
+
+        var contextIndex = 0;
+        foreach (var (column, value) in ContextColumns(changeContext))
+        {
+            var name = sqlHelper.GenerateParameterName("c" + contextIndex++);
+            columns.Add(sqlHelper.DelimitIdentifier(column));
+            placeholders.Add(name);
+            parameters.Add(new HistoryParameter(
+                name,
+                value,
+                row.HistoryEntityType.FindProperty(column)?.GetRelationalTypeMapping()));
         }
 
         var operationParameter = sqlHelper.GenerateParameterName("op");

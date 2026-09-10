@@ -18,7 +18,7 @@
   processes. `HistoryWriter.Trigger` will cover that; it is not implemented yet, so today this is a
   hard limitation, not a choice.
 - The change-context columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`)
-  are written `NULL` until the `IChangeContextProvider` ships.
-- One extra round-trip per transaction to push the change context.
+  are written `NULL` unless an `IChangeContextProvider` is registered
+  (`UseHindsight(h => h.WithChangeContext<T>())`). Hindsight ships no default provider.
 - History tables grow without bound. Partitioning by `valid_from` and retention are v2; the schema is
   chosen so they can be added without migration of existing data.

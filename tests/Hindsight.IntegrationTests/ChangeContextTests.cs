@@ -5,9 +5,11 @@ namespace Hindsight.IntegrationTests;
 
 /// <summary>
 /// End-to-end tests for the change-context columns (<c>changed_by</c>, <c>changed_by_name</c>,
-/// <c>correlation_id</c>, <c>reason</c>, <c>extra</c>) on a real PostgreSQL. Shaped as a
-/// <c>[Theory]</c> over <see cref="HistoryWriter"/> so the trigger writer slots in later; only
-/// <see cref="HistoryWriter.Interceptor"/> exists today (.claude/rules/tests.md).
+/// <c>correlation_id</c>, <c>reason</c>, <c>extra</c>) on a real PostgreSQL, run in both
+/// <see cref="HistoryWriter.Interceptor"/> mode (the provider is read in the interceptor and written
+/// into each <c>INSERT</c>) and <see cref="HistoryWriter.Trigger"/> mode (the provider is read once per
+/// <c>SaveChanges</c> and pushed into the transaction with <c>set_config</c>, then read back by the
+/// trigger). Assertions are on the recorded values, not on wall-clock timing (.claude/rules/tests.md).
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class ChangeContextTests(PostgresFixture postgres)
@@ -16,6 +18,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task Provider_values_populate_the_context_columns_on_insert(HistoryWriter writer)
     {
         var provider = new RecordingChangeContextProvider(() => new ChangeContext
@@ -41,6 +44,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task Update_stamps_the_new_open_row_and_leaves_the_closed_row_untouched(HistoryWriter writer)
     {
         var current = new ChangeContext { UserId = "u1", Reason = "created" };
@@ -70,6 +74,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task Delete_tombstone_carries_the_context(HistoryWriter writer)
     {
         var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "remover", Reason = "gdpr erasure" });
@@ -94,6 +99,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task WithReason_overrides_the_provider_reason_only_inside_the_scope(HistoryWriter writer)
     {
         var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u", Reason = "provider reason" });
@@ -126,6 +132,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task Without_a_provider_the_context_columns_are_null_and_SaveChanges_succeeds(HistoryWriter writer)
     {
         await using var h = await CreateAsync(
@@ -144,6 +151,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task WithReason_works_without_a_registered_provider(HistoryWriter writer)
     {
         await using var h = await CreateAsync(
@@ -162,6 +170,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task The_provider_is_called_once_per_SaveChanges_regardless_of_row_count(HistoryWriter writer)
     {
         var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u" });
@@ -178,6 +187,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task A_provider_exception_propagates_and_nothing_is_committed(HistoryWriter writer)
     {
         var provider = new RecordingChangeContextProvider(
@@ -205,7 +215,9 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     private async Task<Harness> CreateAsync(
         HistoryWriter writer, string dbName, MutableTimeProvider time, RecordingChangeContextProvider? provider)
     {
-        var cs = await postgres.CreateDatabaseAsync(dbName, Ct);
+        var suffix = writer == HistoryWriter.Trigger ? "_trg" : "_int";
+        var trimmed = dbName.Length > 58 ? dbName[..58] : dbName;
+        var cs = await postgres.CreateDatabaseAsync(trimmed + suffix, Ct);
 
         var services = new Dictionary<Type, object> { [typeof(TimeProvider)] = time };
         if (provider is not null)

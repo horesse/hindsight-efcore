@@ -40,6 +40,21 @@ a semantic change, and guessing wrong silently corrupts old versions.
 Both tables get the `ALTER COLUMN`. If the conversion can fail on old data (narrowing a type), the
 migration fails on the history table first; fix the data or widen the type.
 
+## The trigger, when you use `HistoryWriter.Trigger`
+
+With the [trigger writer](history-writers.md), the migration that first creates a history table also
+emits its `…_history_write()` function and `…_history_trg` trigger. After that, any migration that
+adds, drops or renames a column on the temporal entity — or on its history table — carries a fresh
+`CREATE OR REPLACE FUNCTION` so the function body always matches the current versioned column set:
+
+- **added column** → the refreshed function copies it into every new history row.
+- **removed / renamed column** → it stays on the history table as a nullable orphan (above), and the
+  refreshed function simply stops writing it. Old rows keep their values; new rows get `NULL` there.
+
+The trigger definition itself never changes, only the function body, so this is always a
+`CREATE OR REPLACE` — never a `DROP` on the history table (golden rule 3). Dropping the whole history
+table (only if you write that migration by hand) also drops the function, `CASCADE`.
+
 ## Making an existing table temporal
 
 Planned for v1.1: the migration will create the history table and seed it with the current rows as

@@ -12,17 +12,22 @@ between them with a migration.
 | Timestamp | `TimeProvider`, one value per `SaveChanges` | `now()`, one per transaction |
 | Two writers with clock skew | can produce overlapping intervals | safe: `GREATEST(now(), prev.valid_from + 1µs)` |
 | Same transaction as the data change | yes | yes, by construction |
+| Update that sets a versioned column to its current value | writes a history row | writes nothing (`IS NOT DISTINCT FROM` guard) |
 | Superuser or extension | no | no — trigger functions need only table ownership |
-| Status | **available** (the default) | not implemented yet — arrives in a later release |
+| Status | available; the default | available; **recommended in production** |
 
-Today `HistoryWriter.Interceptor` is the only writer, and it is the default: `UseHindsight()` with no
-configuration uses it. Selecting `HistoryWriter.Trigger` throws `NotSupportedException`.
+`HistoryWriter.Interceptor` is the default: `UseHindsight()` with no configuration uses it. Choose the
+writer explicitly with `UseHistoryWriter`:
 
 ```csharp
 services.AddDbContext<AppDbContext>(o => o
     .UseNpgsql(connectionString)
-    .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Interceptor)));
+    .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger)));
 ```
+
+Because both writers produce the same history schema and the same intervals, switching is a
+one-migration change: flip the option and run `dotnet ef migrations add SwitchToTriggerWriter` — the
+migration creates (or drops) the trigger function; it never touches your data or the history columns.
 
 ## How the interceptor writer works
 
@@ -54,9 +59,8 @@ column lands in history exactly as it does in the main table.
 ### What it does not see
 
 `ExecuteUpdate`, `ExecuteDelete`, `FromSql` writes, `SqlQuery`, and any change made by another process
-never reach a `SaveChangesInterceptor`, so they write no history (DESIGN.md D4). If that matters, you
-need the trigger writer — which is not available yet. Until then, route changes to temporal entities
-through tracked `SaveChanges`.
+never reach a `SaveChangesInterceptor`, so they write no history (DESIGN.md D4). If that matters,
+switch to the trigger writer, which sits in the database and catches them all.
 
 ### Change context
 
@@ -72,21 +76,62 @@ untouched. `db.WithReason("…")` opens a scope that overrides `ChangeContext.Re
 [Configuration → Context configuration](configuration.md#context-configuration) for the provider
 contract and a worked example.
 
-## The trigger writer (planned)
+## How the trigger writer works
 
-An `AFTER INSERT OR UPDATE OR DELETE` plpgsql trigger, generated into your migration from the same
-annotations, will write history for *every* change — including `ExecuteUpdate` and raw SQL. It closes
-the previous version with `GREATEST(now(), prev.valid_from + interval '1 microsecond')` so concurrent
-transactions cannot produce a negative interval, and it needs only table ownership, no superuser and
-no extension.
-
-Change context will reach the trigger through a transaction-local setting:
+Enabling `HistoryWriter.Trigger` changes what a migration generates. For every temporal entity, the
+migration that first creates the history table also emits, from the same `Hindsight:*` annotations:
 
 ```sql
-SELECT set_config('hindsight.user_id', @userId, true),
-       set_config('hindsight.correlation_id', @correlationId, true);
+CREATE OR REPLACE FUNCTION policies_history_write() RETURNS trigger LANGUAGE plpgsql AS $hindsight$ … $hindsight$;
+CREATE OR REPLACE TRIGGER policies_history_trg
+    AFTER INSERT OR UPDATE OR DELETE ON policies FOR EACH ROW EXECUTE FUNCTION policies_history_write();
 ```
 
-The trigger reads it back with `current_setting('hindsight.user_id', true)` (the `true` makes a
-missing value return `NULL` rather than error). This costs one round-trip per transaction; the
+The function body does exactly what the interceptor does, in plpgsql:
+
+- **`INSERT`** → one row into `…_history`, `operation = 1`, `valid_from = now()`, `valid_to = 'infinity'`.
+- **`UPDATE`** → if no versioned column actually changed (`NEW` *is not distinct from* `OLD` across the
+  versioned columns), do nothing; otherwise close the open row with
+  `valid_to = GREATEST(now(), valid_from + interval '1 microsecond')`, then `INSERT` a new open row,
+  `operation = 2`, starting exactly where the previous one ended.
+- **`DELETE`** → close the open row, then `INSERT` a tombstone: `operation = 3`,
+  `valid_from = valid_to` (an empty interval that `AsOf` never matches).
+
+`now()` is the transaction timestamp, so every row a transaction writes shares one instant. The
+`GREATEST(…, valid_from + 1µs)` close means two transactions that race on the same row still produce a
+strictly positive, contiguous interval — no superuser, no extension, only ownership of the table.
+
+The timestamp source is the one behavioural difference you can observe: the interceptor uses the
+registered `TimeProvider` (so tests can inject time), the trigger uses `now()`. A second, smaller
+difference: an `UPDATE` that assigns a versioned column *its current value* writes a history row under
+the interceptor (EF marks the property modified) but not under the trigger (the values are equal).
+
+### Re-generating the trigger when the schema changes
+
+Whenever a later migration adds, drops or renames a column on a temporal entity — or on its history
+table — the trigger writer appends a fresh `CREATE OR REPLACE FUNCTION` to that migration so the
+function body always matches the current versioned column set. Dropped columns are kept on the history
+table as nullable orphans (DESIGN.md D6); the trigger simply stops writing them, and old rows keep
+their values. See [Schema evolution](schema-evolution.md).
+
+### Change context
+
+The `changed_by`, `changed_by_name`, `correlation_id`, `reason` and `extra` columns are filled from an
+<xref:Hindsight.IChangeContextProvider>, exactly as in interceptor mode — but the value reaches the
+trigger through a transaction-local setting. Once per `SaveChanges` that writes a temporal entity,
+Hindsight runs:
+
+```sql
+SELECT set_config('hindsight.changed_by', @changedBy, true),
+       set_config('hindsight.correlation_id', @correlationId, true) /* …and the rest */;
+```
+
+and the trigger reads each back with `current_setting('hindsight.changed_by', true)` (the `true` makes
+a missing value return `NULL` rather than error). If the caller has no transaction open, Hindsight
+opens one for that `SaveChanges` — EF Core runs a single-statement save without a transaction by
+default, and a transaction-local setting needs one — and commits it with the data. `db.WithReason("…")`
+works the same as in interceptor mode. This costs one extra round-trip per `SaveChanges`; the
 repository benchmarks measure it.
+
+Bulk writes (`ExecuteUpdate` / `ExecuteDelete`) and raw SQL still get full history rows — the trigger
+sees them — but with `NULL` context columns, because nothing pushed a `ChangeContext` for them.

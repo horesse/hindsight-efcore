@@ -34,19 +34,21 @@ services.AddDbContext<AppDbContext>(o => o
 ## Choosing the history writer
 
 ```csharp
-options.UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Interceptor));
+options.UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger));
 ```
 
-`HistoryWriter.Interceptor` (the default, so the call above is optional) writes history from a
+`HistoryWriter.Interceptor` (the default, so passing it is optional) writes history from a
 `SaveChangesInterceptor` in the application, in the same transaction as the data change, with one
-timestamp per `SaveChanges` taken from the registered `TimeProvider`. `HistoryWriter.Trigger` — a
-database trigger that also captures `ExecuteUpdate` and raw SQL — is not implemented yet and throws
-`NotSupportedException`. See [History writers](history-writers.md) for the trade-offs and the exact
-mechanics.
+timestamp per `SaveChanges` taken from the registered `TimeProvider`. `HistoryWriter.Trigger` moves
+that logic into a plpgsql trigger the migration generates, so it also captures `ExecuteUpdate`,
+`ExecuteDelete` and raw SQL, and uses `now()` for the timestamp; it is recommended in production. Both
+produce the same history schema, so switching is one migration. See
+[History writers](history-writers.md) for the trade-offs and the exact mechanics.
 
-To make the timestamp deterministic in tests, register a `TimeProvider` on the application service
-provider (`services.AddSingleton<TimeProvider>(new FakeTimeProvider())`); the interceptor resolves it
-from there and falls back to `TimeProvider.System`.
+To make the interceptor's timestamp deterministic in tests, register a `TimeProvider` on the
+application service provider (`services.AddSingleton<TimeProvider>(new FakeTimeProvider())`); it is
+resolved from there and falls back to `TimeProvider.System`. The trigger writer uses `now()` and
+ignores `TimeProvider`; assert on interval shape instead, or use distinct transactions.
 
 ## Context configuration
 
@@ -82,14 +84,19 @@ services.AddDbContext<AppDbContext>(o => o
         .UseHistoryWriter(HistoryWriter.Interceptor)));
 ```
 
-`WithChangeContext<T>` registers the provider type. With `HistoryWriter.Interceptor` the provider is
-called **once per `SaveChanges`** — never once per row — after the tracked changes are snapshotted and
-before any history row is written, and its <xref:Hindsight.ChangeContext> is stamped onto every
-history row that call produces. The provider is resolved from the application service provider (so it
-can take dependencies); a provider with a parameterless constructor is created directly. An exception
-from the provider propagates out of `SaveChanges` and the whole transaction, data change included,
-rolls back. Hindsight ships no default provider — `IHttpContextAccessor` / `ClaimsPrincipal` mapping
-like the sample above is application code.
+`WithChangeContext<T>` registers the provider type. It is called **once per `SaveChanges`** that
+writes a temporal entity — never once per row. Under `HistoryWriter.Interceptor` the returned
+<xref:Hindsight.ChangeContext> is stamped onto every history row that call's `INSERT` produces; under
+`HistoryWriter.Trigger` it is pushed into the transaction with `set_config` and the trigger reads it
+back. Either way the provider is resolved from the application service provider (so it can take
+dependencies); a provider with a parameterless constructor is created directly. An exception from the
+provider propagates out of `SaveChanges` and the whole transaction, data change included, rolls back.
+Hindsight ships no default provider — `IHttpContextAccessor` / `ClaimsPrincipal` mapping like the
+sample above is application code.
+
+Under `HistoryWriter.Trigger`, `ExecuteUpdate` / `ExecuteDelete` and raw SQL still record history, but
+their context columns are `NULL`: they do not go through `SaveChanges`, so no `ChangeContext` is
+pushed for them.
 
 Each `ChangeContext` member maps to one column: `UserId` → `changed_by`, `UserName` →
 `changed_by_name`, `CorrelationId` → `correlation_id`, `Reason` → `reason`, `Extra` → `extra`. A

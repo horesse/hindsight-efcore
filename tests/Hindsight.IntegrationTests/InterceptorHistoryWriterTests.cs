@@ -5,11 +5,11 @@ using Npgsql;
 namespace Hindsight.IntegrationTests;
 
 /// <summary>
-/// End-to-end tests for the history writers on a real PostgreSQL. Shaped as a <c>[Theory]</c> over
-/// <see cref="HistoryWriter"/> so the trigger writer slots in later without touching the assertions;
-/// only <see cref="HistoryWriter.Interceptor"/> exists today. Assertions are on intervals, never on
-/// wall-clock timing — time is injected through <see cref="TimeProvider"/>
-/// (.claude/rules/tests.md).
+/// <see cref="HistoryWriter.Interceptor"/>-specific end-to-end tests on a real PostgreSQL: they inject
+/// wall clock through <see cref="TimeProvider"/> and assert on the exact instants the interceptor
+/// stamps, which only that writer honours. The behaviour shared with <see cref="HistoryWriter.Trigger"/>
+/// — interval shape, tombstones, excluded columns, composite keys — is covered in both modes by
+/// <see cref="TriggerHistoryWriterTests"/> (.claude/rules/tests.md).
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class InterceptorHistoryWriterTests(PostgresFixture postgres)

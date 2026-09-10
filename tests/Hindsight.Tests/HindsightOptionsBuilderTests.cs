@@ -66,13 +66,24 @@ public sealed class HindsightOptionsBuilderTests
     }
 
     [Fact]
-    public void UseHistoryWriter_Trigger_throws_NotSupportedException_pointing_at_Interceptor()
+    public void UseHistoryWriter_records_the_Trigger_choice()
+    {
+        var options = new DbContextOptionsBuilder()
+            .UseNpgsql("Host=localhost;Database=unused")
+            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
+            .Options;
+
+        Assert.Equal(
+            HistoryWriter.Trigger,
+            options.FindExtension<HindsightOptionsExtension>()!.HistoryWriter);
+    }
+
+    [Fact]
+    public void UseHistoryWriter_with_an_undefined_value_throws_ArgumentOutOfRangeException()
     {
         var builder = new DbContextOptionsBuilder().UseNpgsql("Host=localhost;Database=unused");
 
-        var ex = Assert.Throws<NotSupportedException>(
-            () => builder.UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger)));
-
-        Assert.Contains("HistoryWriter.Interceptor", ex.Message);
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => builder.UseHindsight(h => h.UseHistoryWriter((HistoryWriter)42)));
     }
 }

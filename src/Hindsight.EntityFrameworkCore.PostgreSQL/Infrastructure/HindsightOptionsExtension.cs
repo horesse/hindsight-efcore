@@ -55,6 +55,8 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
         services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IConventionSetPlugin, HindsightConventionSetPlugin>());
         services.TryAddEnumerable(
+            ServiceDescriptor.Scoped<IInterceptor, HistorySnapshotGuardInterceptor>());
+        services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IInterceptor, HistoryWriterInterceptor>());
         services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IInterceptor, HindsightQueryExpressionInterceptor>());

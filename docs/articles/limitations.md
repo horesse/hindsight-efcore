@@ -11,9 +11,12 @@
 - **`AsOf()` / `AllVersions()` / `History<T>()` on owned / complex / inherited entities** — throws
   `NotSupportedException`: those column sets are not reconstructable from the history table in v1. Use
   `FromSql` against the history table.
-- **Restoring** an entity to a previous version — history is read-only. An `AsOf()` /
-  `AllVersions()` / `History<T>()` snapshot is detached and no-tracking; re-attaching one and calling
-  `SaveChanges` is not currently blocked, so treat historical results as read-only.
+- **Restoring** an entity to a previous version — history is read-only (DESIGN.md D7). An `AsOf()` /
+  `AllVersions()` / `History<T>()` snapshot is detached and no-tracking, and re-attaching one
+  (`Update` / `Attach` / `Add` / `Remove`) and calling `SaveChanges` throws
+  `InvalidOperationException` rather than write the stale snapshot back as the current version. To
+  roll a value back, copy it from the snapshot onto a fresh instance, or onto one loaded with a
+  normal query / `DbSet.Find()`, and save that.
 - **TPH hierarchies** — rejected at model validation.
 - **Owned collections** inside temporal entities — owned references and complex properties are
   supported for writing history (their columns live in the same table), owned collections are not.

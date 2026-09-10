@@ -134,7 +134,8 @@ a delete is meant to be read (D12).
 ## D7. Historical queries are always no-tracking
 
 `AsOf`, `AllVersions` and `History<T>` return untracked results. Attempting to save an entity that
-came from history throws with a clear message.
+came from history — re-attaching one with `Update` / `Attach` / `Add` / `Remove` and calling
+`SaveChanges` — throws `InvalidOperationException` with a clear message; see D12 for the mechanism.
 
 ## D8. `AsOf` + `Include` throws in v1
 
@@ -249,9 +250,29 @@ query (else `InvalidOperationException` — move it before `Where`/`OrderBy`/…
 `History<T>()`, which starts from the `DbContext`); on a non-temporal entity it
 throws `InvalidOperationException` naming the entity; on an inheritance hierarchy (D9) or an
 entity with owned / complex members it throws `NotSupportedException` (those column sets are not
-reconstructable from the history table — use `FromSql`). Not done here: blocking a re-attached
-snapshot from being saved (D7 sentence 2) — the result is detached and no-tracking, but nothing stops
-`Update` + `SaveChanges`.
+reconstructable from the history table — use `FromSql`).
+
+**Blocking a re-attached snapshot from being saved (D7 sentence 2) — done, 2026-09-10.** The result
+is detached and no-tracking, but nothing in EF stops `Update` / `Attach` / `Add` / `Remove` +
+`SaveChanges` on it, which would write a stale snapshot back as the current version and generate
+spurious history — the silent-wrong outcome rule 2 exists to prevent. No public materialization hook
+fires for the rewriter's `new TEntity { … }` projection (spike: `IMaterializationInterceptor` is
+skipped for a mapped-type `MemberInit`), and wrapping the projection body in a marker call is an
+optimization barrier that stops `Where` / `OrderBy` / `Select` over the entity's members from
+translating. So the mark is applied *outside* everything the caller composed:
+`HindsightQueryExpressionInterceptor`, after the rewrite, appends a trailing client-evaluated
+`Select(HistoryOrigin.Tag)` (or `TagVersion` for `History<T>`) when — and only when — the query's own
+result sequence descends through `Where` / `OrderBy` / `Concat` / … to one of the rewriter's nodes
+*and* still has that node's element type (a scalar / DTO projection, or a history query used only in
+a subquery, is left alone). `HistoryOrigin` keeps the marks in a `ConditionalWeakTable`, so they add
+no field to the user's type, do not root the instance, and survive `ChangeTracker.Clear()`.
+`HistorySnapshotGuardInterceptor` (an `ISaveChangesInterceptor` registered in both writer modes)
+runs before the history writer and throws `InvalidOperationException` if any `Added` / `Modified` /
+`Deleted` entry is a marked instance. No new public surface — `Tag` / `TagVersion` are `internal`,
+called from an expression EF compiles. The trailing `Select` makes the reconstructed entity no longer
+the leaf projection, so the canonical-SQL Verify snapshots now show the history columns unaliased
+(`SELECT p.id, p.status, …` instead of `p.id AS "Id", …`) — same table, columns and order, one query,
+no client evaluation beyond the `Tag` call itself.
 
 Revisit if: EF Core changes `IQueryExpressionInterceptor` semantics or removes the public
 `EntityQueryRootExpression(IEntityType)` constructor (the `efcore-preview` canary covers this); or a

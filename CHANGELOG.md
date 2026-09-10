@@ -60,3 +60,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   Same `InvalidOperationException` / `NotSupportedException` guards as `AsOf` / `AllVersions` for
   non-temporal entities, `Include`, `AsTracking`, inheritance and owned/complex members. New public
   `Version<TEntity>` and `VersionOperation` types.
+- History results are read-only, enforced (DESIGN.md D7). Re-attaching an entity that came from
+  `AsOf()` / `AllVersions()` / `History<T>()` (`Update`, `Attach`, `Add`, `Remove`, or a manual state
+  change) and calling `SaveChanges` throws `InvalidOperationException` instead of silently writing the
+  stale snapshot back as the current version. `Version<T>.Entity` is covered too. Copying values onto
+  a fresh instance, or onto one from `DbSet.Find()` / a normal query, is unaffected. No new public
+  API.

@@ -57,6 +57,17 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
     // expects a leading underscore.
     internal const short DeleteOperation = 3;
 
+    // The AsNoTracking(...) node produced for each rewritten marker (by reference) -> the CLR type it
+    // yields (TEntity for AsOf / AllVersions, Version<TEntity> for History<T>). Lets the caller
+    // (HindsightQueryExpressionInterceptor) tell a query whose result is a reconstructed history
+    // entity from one that merely uses a history query in a subquery, so it can tag the former for
+    // the save-back guard (DESIGN.md D7) without a wrapper inside the projection.
+    private readonly Dictionary<Expression, Type> _rewrittenMarkers = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>The rewritten <c>AsOf</c> / <c>AllVersions</c> / <c>History&lt;T&gt;</c> nodes in the visited
+    /// tree, mapped to the CLR type each yields.</summary>
+    public IReadOnlyDictionary<Expression, Type> RewrittenMarkers => _rewrittenMarkers;
+
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
         ArgumentNullException.ThrowIfNull(node);
@@ -168,7 +179,9 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 
         // D7: a Select that materialises a mapped entity (or one nested in Version<TEntity>) is tracked
         // unless this is forced.
-        return Expression.Call(_asNoTracking.MakeGenericMethod(resultClrType), projected);
+        var rewritten = Expression.Call(_asNoTracking.MakeGenericMethod(resultClrType), projected);
+        _rewrittenMarkers[rewritten] = resultClrType;
+        return rewritten;
     }
 
     // h => new Version<TEntity>

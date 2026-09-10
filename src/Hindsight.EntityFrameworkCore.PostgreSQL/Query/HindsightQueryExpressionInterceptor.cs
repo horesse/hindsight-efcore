@@ -44,7 +44,13 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
             ?? throw new InvalidOperationException(
                 "AsOf() / AllVersions() / History<T>(): the query has no DbContext model to resolve the history table from.");
 
-        return new HistoryQueryRootRewriter(model).Visit(queryExpression);
+        var rewriter = new HistoryQueryRootRewriter(model);
+        var rewritten = rewriter.Visit(queryExpression);
+
+        // D7: mark the reconstructed instances this query hands back so a later SaveChanges that
+        // re-attaches one is rejected (Writers.HistorySnapshotGuardInterceptor). Done here, outside
+        // everything the caller composed, so member-level Where / OrderBy / Select still translate.
+        return HistoryOriginTagger.Append(rewritten, rewriter.RewrittenMarkers);
     }
 
     /// <summary>

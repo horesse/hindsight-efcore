@@ -29,6 +29,7 @@ Hindsight.HindsightDbContextOptionsExtensions
 Hindsight.HindsightOptionsBuilder
 Hindsight.HindsightOptionsBuilder.UseHistoryWriter(Hindsight.HistoryWriter writer) -> Hindsight.HindsightOptionsBuilder!
 Hindsight.HindsightOptionsBuilder.WithChangeContext<TProvider>() -> Hindsight.HindsightOptionsBuilder!
+Hindsight.HindsightQueryableExtensions
 Hindsight.HistoryWriter
 Hindsight.HistoryWriter.Interceptor = 0 -> Hindsight.HistoryWriter
 Hindsight.HistoryWriter.Trigger = 1 -> Hindsight.HistoryWriter
@@ -51,4 +52,5 @@ static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft
 static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
 static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
 static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
+static Hindsight.HindsightQueryableExtensions.AsOf<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset asOf) -> System.Linq.IQueryable<TEntity!>!
 static Hindsight.TemporalEntityTypeBuilderExtensions.IsTemporal<TEntity>(this Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>! builder, System.Action<Hindsight.TemporalEntityTypeBuilder<TEntity!>!>? configure = null) -> Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>!

@@ -1,4 +1,5 @@
 using Hindsight.Conventions;
+using Hindsight.Query;
 using Hindsight.Writers;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -55,6 +56,8 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
             ServiceDescriptor.Scoped<IConventionSetPlugin, HindsightConventionSetPlugin>());
         services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IInterceptor, HistoryWriterInterceptor>());
+        services.TryAddEnumerable(
+            ServiceDescriptor.Scoped<IInterceptor, HindsightQueryExpressionInterceptor>());
     }
 
     public void Validate(IDbContextOptions options)

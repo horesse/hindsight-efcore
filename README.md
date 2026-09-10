@@ -77,7 +77,8 @@ await db.Policies.AllVersions().Where(...).ToListAsync();   // every version, ne
 await db.History<Policy>().Where(v => ...).ToListAsync();   // versions with metadata
 ```
 
-Historical queries are always no-tracking. Saving an entity read from history throws.
+Historical queries are always no-tracking; treat the results as read-only snapshots.
+Only `AsOf` is implemented so far — `AllVersions` / `History<T>` are next.
 
 ## Two ways to write history
 

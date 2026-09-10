@@ -152,9 +152,50 @@ MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only
 publishing uses nuget.org Trusted Publishing (OIDC) behind a reviewed `nuget` environment — no API key is stored.
 Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the public surface.
 
+## D12. `AsOf` translates by query-root replacement — resolved by spike, 2026-09-10
+
+`queryable.AsOf(at)` is a marker method. A public `IQueryExpressionInterceptor.QueryCompilationStarting`
+hook (EF Core 10, no `*.Internal`) rewrites the source entity's query root into
+`historyRoot.Where(valid_from <= @asOf && valid_to > @asOf).Select(h => new Policy { ... }).AsNoTracking()`
+over the property-bag history entity type, found via the `Hindsight:HistoryEntityType` annotation.
+The instant is a closure member access, not `Expression.Constant`, so EF parameterises it and the
+query cache is not busted per timestamp.
+
+**The spike question — does root replacement survive composition with `Where`/`OrderBy`/`Select`/
+`First`? — is answered yes.** `db.Policies.AsOf(t).Where(p => p.Premium > 0).OrderBy(p => p.Number)
+.Select(p => p.Status).First()` compiles to one statement —
+`SELECT p.status FROM policies_history AS p WHERE p.valid_from <= @asOf AND p.valid_to > @asOf AND p.premium > 0 ORDER BY p.number LIMIT 1`
+— with no client evaluation. Covered by `AsOfQueryTests` in `Hindsight.IntegrationTests`
+(Testcontainers): point-in-time between versions; empty before the first version; half-open boundary
+at `valid_from`; deleted-entity tombstone never matched; composite key; enum-as-string / `jsonb` /
+`text[]` projected back into the entity; `Concat` of two `AsOf`; `AsOf` on both sides of a join;
+`AsOf` inside a `Contains` subquery — all translate. The canonical SQL has a Verify snapshot.
+
+`FromSql` (the fallback named below) also composes, but stays the fallback: it forces every mapped
+property into the `SELECT` list, so an `Exclude()`-d non-nullable column needs a sentinel value in
+the SQL — meaningless data in a real column, which rule 2 discourages.
+
+Two things root replacement does not give for free, both handled in the rewrite:
+- **No-tracking (D7).** A `Select` that materialises a mapped entity with all key properties set is
+  tracked by EF, so the rewrite appends `AsNoTracking()`. `AsOf(...).AsTracking()` throws — the hook
+  rejects an explicit tracking operator rather than let it override.
+- **`AsOf` + `Include` (D8).** EF would throw its own `InvalidOperationException` about `Include`
+  after `Select`; the hook detects `Include` / `ThenInclude` next to `AsOf` first and throws
+  `NotSupportedException` naming D8.
+
+Further rules the hook enforces: `AsOf` must be the first operator on the query (else
+`InvalidOperationException` — move it before `Where`/`OrderBy`/…); `AsOf` on a non-temporal entity
+throws `InvalidOperationException` naming the entity; `AsOf` on an inheritance hierarchy (D9) or an
+entity with owned / complex members throws `NotSupportedException` (those column sets are not
+reconstructable from the history table — use `FromSql`). Not done here: blocking a re-attached
+snapshot from being saved (D7 sentence 2) — the result is detached and no-tracking, but nothing stops
+`Update` + `SaveChanges`.
+
+Revisit if: EF Core changes `IQueryExpressionInterceptor` semantics or removes the public
+`EntityQueryRootExpression(IEntityType)` constructor (the `efcore-preview` canary covers this); or a
+store type appears that the `EF.Property<T>` projection cannot round-trip.
+
 ## Open questions (resolve in the spike, then move up)
 
-- Does `IQueryTranslationPreprocessor` root replacement for `AsOf` survive composition with
-  `Where`/`OrderBy`/`Select`/`First`? Time-box: three evenings; fallback is `FromSql`.
 - Does a `DropColumn` on the history table get through the differ in a way we can intercept
   without touching internals?

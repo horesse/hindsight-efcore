@@ -34,3 +34,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   history rows. Without a provider those columns stay `NULL` and `SaveChanges` still succeeds.
   `DbContext.WithReason("…")` opens a scope that overrides the reason for the `SaveChanges` calls
   inside it. Hindsight ships no default provider.
+- `queryable.AsOf(DateTimeOffset)`: reads each temporal entity as it stood at a point in time from
+  its history table. `AsOf` must be the first operator on the query; `Where`, `OrderBy`, `Select`,
+  `First`, `Any`, `Count` compose after it and translate to a single SQL query with the instant as a
+  parameter and the half-open predicate `valid_from <= @asOf AND valid_to > @asOf`. Results are
+  always no-tracking; `AsOf(...).AsTracking()` throws. `AsOf` on a non-temporal entity throws
+  `InvalidOperationException`; `AsOf` with `Include` / `ThenInclude` throws `NotSupportedException`
+  (DESIGN.md D8); `AsOf` on an inheritance hierarchy or an entity with owned/complex members throws
+  `NotSupportedException`.

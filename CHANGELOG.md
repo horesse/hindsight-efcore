@@ -95,3 +95,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `DropColumn` / `DropTable` / narrowing `AlterColumn` on a history table. Removing a **primary-key**
   property from a temporal entity throws `InvalidOperationException` — the history version index and
   the writer's close-previous-version step need the key columns. No new public API.
+
+### Changed
+
+- `HistoryWriter.Interceptor` now writes all history rows of a `SaveChanges` in a single database
+  round-trip (a batched `DbBatch`, chunked at 512 rows) instead of one `UPDATE` + `INSERT` round-trip
+  per row. Same history rows, same intervals; large batch saves are dramatically faster.

@@ -49,6 +49,10 @@ migration creates (or drops) the trigger function; it never touches your data or
      `valid_from = valid_to = @ts`. That empty interval is a tombstone: it records that (and when)
      the row was deleted but is never returned by `AsOf`, so a deleted entity has **zero** open
      history rows.
+
+   Every one of these statements — across all changed entities — goes to the database in a single
+   `DbBatch` (one network round-trip), chunked at 512 rows to stay well under PostgreSQL's
+   parameters-per-`Bind` protocol limit. It is not one round-trip per statement.
 4. The interceptor commits only the transaction it opened itself. If you opened one, your history
    rows are in it and you commit as normal.
 
@@ -131,8 +135,9 @@ a missing value return `NULL` rather than error). If the caller has no transacti
 opens one for that `SaveChanges` — EF Core runs a single-statement save without a transaction by
 default, and a transaction-local setting needs one — and commits it with the data. `db.WithReason("…")`
 works the same as in interceptor mode. This costs one extra round-trip per `SaveChanges` — about
-1.4 ms on a 100-row update in the [benchmarks](#benchmarks) below; the interceptor, which already
-does per-row round-trips, shows no measurable change from the same provider.
+3 ms on a 100-row update in the [benchmarks](#benchmarks) below; for the interceptor the same provider
+call and the five extra columns fold into the batch round-trip it already sends, with no measurable
+change.
 
 Bulk writes (`ExecuteUpdate` / `ExecuteDelete`) and raw SQL still get full history rows — the trigger
 sees them — but with `NULL` context columns, because nothing pushed a `ChangeContext` for them.
@@ -154,30 +159,31 @@ Mean wall-clock time for one `SaveChanges` over N temporal entities:
 
 | operation | rows | None | Interceptor | Trigger |
 |---|--:|--:|--:|--:|
-| insert | 1 | 1.0 ms | 3.5 ms | 1.6 ms |
-| insert | 100 | 8.8 ms | 72 ms | 12 ms |
-| insert | 1000 | 64 ms | 597 ms | 81 ms |
-| update | 1 | 0.7 ms | 3.5 ms | 1.0 ms |
-| update | 100 | 8.3 ms | 119 ms | 14 ms |
-| delete | 1 | 0.7 ms | 3.5 ms | 1.0 ms |
-| delete | 100 | 6.5 ms | 120 ms | 12 ms |
+| insert | 1 | 1.0 ms | 3.4 ms | 1.8 ms |
+| insert | 100 | 9.3 ms | 16 ms | 12 ms |
+| insert | 1000 | 63 ms | 106 ms | 83 ms |
+| update | 1 | 0.7 ms | 3.1 ms | 1.0 ms |
+| update | 100 | 7.5 ms | 23 ms | 13 ms |
+| delete | 1 | 0.7 ms | 3.0 ms | 1.0 ms |
+| delete | 100 | 6.0 ms | 22 ms | 12 ms |
 
 Managed allocations for the same calls:
 
 | operation | rows | None | Interceptor | Trigger |
 |---|--:|--:|--:|--:|
-| insert | 100 | 855 KB | 1695 KB | 960 KB |
-| insert | 1000 | 8221 KB | 16730 KB | 9214 KB |
-| update | 100 | 499 KB | 1532 KB | 592 KB |
-| delete | 100 | 373 KB | 1400 KB | 478 KB |
+| insert | 100 | 855 KB | 1580 KB | 960 KB |
+| insert | 1000 | 8166 KB | 14930 KB | 9213 KB |
+| update | 100 | 499 KB | 1367 KB | 592 KB |
+| delete | 100 | 373 KB | 1228 KB | 478 KB |
 
-- **Trigger** stays within roughly 1.3–1.8× of plain EF Core. The database writes the history row
+- **Trigger** stays within roughly 1.2–2× of plain EF Core. The database writes the history row
   inside the same transaction, so the application only pays for the change-context `set_config` (if
   any) and, when the caller opened none, a transaction.
-- **Interceptor** runs one `UPDATE …_history` + one `INSERT …_history` round-trip **per row** in
-  `SavedChanges`. At one row that is a couple of milliseconds; at 100 rows it is 8–18× the baseline
-  depending on the operation; at 1000 rows it dominates. Batch-writing temporal entities is where the
-  two writers diverge most.
+- **Interceptor** batches every `UPDATE …_history` + `INSERT …_history` of a `SaveChanges` into one
+  round-trip in `SavedChanges` (chunked at 512 rows). What is left is the server-side execution of
+  those statements: about 1.8× the baseline for a 100-row insert, ~3× for a 100-row update or delete
+  (two statements per row) and about 1.7× at 1000 rows. Before batching, this path made one
+  round-trip per statement and cost 8–18× the baseline at 100 rows and dominated at 1000.
 - The single-row rows sit close to the container round-trip noise floor — read the 100- and
   1000-row rows for the trend.
 
@@ -189,9 +195,9 @@ only):
 
 | writer | without | with | delta |
 |---|--:|--:|--:|
-| Interceptor | 121 ms | 122 ms | within noise |
-| Trigger | 13.7 ms | 15.1 ms | +1.4 ms, +24 KB |
+| Interceptor | 23.0 ms | 23.8 ms | within noise |
+| Trigger | 12.7 ms | 15.7 ms | +3.0 ms, +24 KB |
 
 For **Trigger** the delta is the one extra `set_config` round-trip per `SaveChanges`. For
 **Interceptor** the provider call and the five extra columns on each history `INSERT` disappear into
-the per-row round-trip cost that is already there.
+the batch round-trip that is already there.

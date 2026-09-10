@@ -98,11 +98,11 @@ Overhead a 100-row `SaveChanges` adds over plain EF Core (mean, one PostgreSQL 1
 
 | | insert | update | delete |
 |---|--:|--:|--:|
-| `HistoryWriter.Interceptor` | +63 ms | +111 ms | +113 ms |
-| `HistoryWriter.Trigger` | +3 ms | +5 ms | +5 ms |
+| `HistoryWriter.Interceptor` | +7 ms | +16 ms | +16 ms |
+| `HistoryWriter.Trigger` | +2 ms | +6 ms | +6 ms |
 
-The interceptor issues one `UPDATE` + one `INSERT` on the history table **per row** after the save,
-so its cost scales with batch size; the trigger writes history in the database inside the same
+The interceptor sends every history `UPDATE` + `INSERT` of a `SaveChanges` in one batched round-trip
+(chunked at 512 rows) after the save; the trigger writes history in the database inside the same
 statement. Measured on a Ryzen 7 7800X3D, .NET 10, PostgreSQL 17 — **your numbers will differ**.
 Full tables and method in [History writers](docs/articles/history-writers.md#benchmarks); re-run with
 `dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'`.

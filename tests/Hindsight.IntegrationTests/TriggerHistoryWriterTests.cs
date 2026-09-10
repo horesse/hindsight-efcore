@@ -130,6 +130,78 @@ public sealed class TriggerHistoryWriterTests(PostgresFixture postgres)
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
     [InlineData(HistoryWriter.Trigger)]
+    public async Task Large_mixed_batch_keeps_every_version_chain_well_formed(HistoryWriter writer)
+    {
+        await using var h = await CreateAsync(writer, nameof(Large_mixed_batch_keeps_every_version_chain_well_formed));
+
+        // More rows than the interceptor writer packs into one DbBatch (HistoryRowWriter.RowsPerBatch),
+        // so the chunk boundary is exercised. The interval assertions are the same ones the per-scenario
+        // theories above make — just at scale and interleaved in a single SaveChanges.
+        const int inserted = 550;
+        const int updated = 200;
+        const int deleted = 100;
+
+        var policies = new List<Policy>(inserted);
+        for (var i = 0; i < inserted; i++)
+        {
+            var policy = NewPolicy($"ACME-{i:D4}");
+            policies.Add(policy);
+            h.Db.Policies.Add(policy);
+        }
+
+        await h.Db.SaveChangesAsync(Ct);
+
+        for (var i = 0; i < updated; i++)
+        {
+            policies[i].Status = PolicyStatus.Active;
+            policies[i].Premium += 10m;
+        }
+
+        for (var i = updated; i < updated + deleted; i++)
+        {
+            h.Db.Policies.Remove(policies[i]);
+        }
+
+        await h.Db.SaveChangesAsync(Ct);
+
+        var byNumber = (await ReadPolicyHistoryAsync(h.ConnectionString))
+            .GroupBy(v => v.Number)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        Assert.Equal(inserted, byNumber.Count);
+
+        for (var i = 0; i < inserted; i++)
+        {
+            var versions = byNumber[$"ACME-{i:D4}"];
+
+            if (i < updated)
+            {
+                Assert.Equal([(short)1, (short)2], versions.Select(v => v.Operation));
+                Assert.False(versions[0].IsOpen);
+                Assert.Equal(versions[0].ValidTo, versions[1].ValidFrom);   // contiguous
+                Assert.True(versions[0].ValidTo > versions[0].ValidFrom);   // strictly positive
+                Assert.Single(versions, v => v.IsOpen);                     // exactly one open row
+                Assert.Equal("Active", versions[1].Status);
+            }
+            else if (i < updated + deleted)
+            {
+                Assert.Equal([(short)1, (short)3], versions.Select(v => v.Operation));
+                Assert.DoesNotContain(versions, v => v.IsOpen);             // zero open rows for a deleted entity
+                Assert.Equal(versions[0].ValidTo, versions[1].ValidFrom);   // tombstone starts where the last version ended
+                Assert.Equal(versions[1].ValidFrom, versions[1].ValidTo);   // empty [ts, ts)
+            }
+            else
+            {
+                var only = Assert.Single(versions);                         // untouched by the second save
+                Assert.Equal((short)1, only.Operation);
+                Assert.True(only.IsOpen);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task Enum_jsonb_and_array_columns_round_trip_into_history(HistoryWriter writer)
     {
         await using var h = await CreateAsync(writer, nameof(Enum_jsonb_and_array_columns_round_trip_into_history));

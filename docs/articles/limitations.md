@@ -10,7 +10,8 @@
   first operator, on the `DbSet` itself.
 - **`AsOf()` on owned / complex / inherited entities** — throws `NotSupportedException`: those column
   sets are not reconstructable from the history table in v1. Use `FromSql` against the history table.
-- **`AllVersions()` / `History<T>()`** — not implemented yet; only `AsOf()` reads history so far.
+- **`History<T>()`** — the version-metadata query (period columns plus `operation` / `changed_by` /
+  `reason` / …) is not implemented yet. `AsOf()` and `AllVersions()` read the versioned columns.
 - **Restoring** an entity to a previous version — history is read-only. An `AsOf()` snapshot is
   detached and no-tracking; re-attaching one and calling `SaveChanges` is not currently blocked, so
   treat historical results as read-only.

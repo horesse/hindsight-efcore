@@ -42,3 +42,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `InvalidOperationException`; `AsOf` with `Include` / `ThenInclude` throws `NotSupportedException`
   (DESIGN.md D8); `AsOf` on an inheritance hierarchy or an entity with owned/complex members throws
   `NotSupportedException`.
+- `queryable.AllVersions()`: reads every stored version of a temporal entity from its history table —
+  one row per insert and update, newest first (by `valid_from` descending, replaceable with your own
+  `OrderBy`). The `delete` tombstone is excluded, so a deleted entity's timeline ends at the version
+  that was open when it was deleted. Same rules as `AsOf`: first operator on the query, composes into
+  a single SQL query, always no-tracking, and the same `InvalidOperationException` /
+  `NotSupportedException` guards for non-temporal entities, `Include`, `AsTracking`, inheritance and
+  owned/complex members.

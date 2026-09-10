@@ -34,19 +34,45 @@ var richDraftNumbers = await db.Policies
 sent as a query parameter, so different instants share one compiled query and one query-plan cache
 entry.
 
-## Every version, and version metadata
+## Every version: `AllVersions`
 
-> [!WARNING]
-> `AllVersions()` and `History<T>()` are not implemented yet. The snippets below are the intended
-> shape; today only `AsOf` works.
+"Show me this policy's whole history."
 
 ```csharp
-// every stored version of the matching policies, newest first
 var timeline = await db.Policies
     .AllVersions()
     .Where(p => p.Id == id)
     .ToListAsync();
+```
 
+`AllVersions()` switches the query from `policies` to `policies_history` and returns **every stored
+version** — one row per `insert` and per `update`. There is no period predicate: this is the full
+timeline, not a point in time. Rows come back **newest first**, ordered by `valid_from` descending;
+add your own `OrderBy` / `OrderByDescending` to replace that ordering (a trailing `ThenBy` keeps
+newest-first as the primary key). Like `AsOf`, it must be the **first** operator on the query and
+everything after it composes into one SQL statement:
+
+```csharp
+var premiumChanges = await db.Policies
+    .AllVersions()
+    .Where(p => p.Id == id)
+    .Select(p => p.Premium)
+    .Distinct()
+    .ToListAsync();
+```
+
+The `delete` tombstone is **not** a version — a deleted policy's timeline ends at the version that
+was open when it was deleted, and `AllVersions()` never returns a row for the deletion itself. The
+*when* and *who* of a delete live in the change-context columns; read them with `History<Policy>()`
+(below).
+
+## Version metadata: `History<T>`
+
+> [!WARNING]
+> `History<T>()` is not implemented yet. The snippet below is the intended shape; today `AsOf` and
+> `AllVersions` are the way to read history.
+
+```csharp
 // versions plus the "who / why" columns
 var audit = await db.History<Policy>()
     .Where(v => v.Entity.Id == id)
@@ -57,16 +83,20 @@ var audit = await db.History<Policy>()
 
 ## Rules
 
-- **Always no-tracking.** `AsOf` results are detached snapshots — the change tracker is untouched.
-  `AsOf(...).AsTracking()` throws: a historical row is not something you edit and save back.
-- **No `Include`.** `AsOf(...).Include(...)` throws `NotSupportedException`. Reading a related entity
-  at the same instant is an interval join on two periods; v1 refuses rather than return a result that
-  looks right and is not (see [DESIGN.md](../design.md) D8). Load the related rows with a second
-  `AsOf` query keyed on the foreign key you already have.
-- **`AsOf` goes first.** `db.Policies.Where(...).AsOf(t)` throws — put `AsOf` directly on the
-  `DbSet`, before `Where` / `OrderBy` / `Select`.
-- **Standalone entities only.** `AsOf` on an entity in an inheritance hierarchy, or one with owned or
-  complex members, throws `NotSupportedException` — those shapes are not carried on the history table
-  in v1. Read `policies_history` directly with `FromSql` for them.
-- **Temporal only.** `AsOf` on an entity that was never `IsTemporal()` throws
+These apply to both `AsOf` and `AllVersions`.
+
+- **Always no-tracking.** Results are detached snapshots — the change tracker is untouched.
+  `AsOf(...).AsTracking()` / `AllVersions().AsTracking()` throws: a historical row is not something
+  you edit and save back.
+- **No `Include`.** `AsOf(...).Include(...)` / `AllVersions().Include(...)` throws
+  `NotSupportedException`. Reading a related entity from history is an interval join on two periods;
+  v1 refuses rather than return a result that looks right and is not (see
+  [DESIGN.md](../design.md) D8). Load the related rows with a second history query keyed on the
+  foreign key you already have.
+- **The history operator goes first.** `db.Policies.Where(...).AsOf(t)` throws — put `AsOf` /
+  `AllVersions` directly on the `DbSet`, before `Where` / `OrderBy` / `Select`.
+- **Standalone entities only.** An entity in an inheritance hierarchy, or one with owned or complex
+  members, throws `NotSupportedException` — those shapes are not carried on the history table in v1.
+  Read `policies_history` directly with `FromSql` for them.
+- **Temporal only.** `AsOf` / `AllVersions` on an entity that was never `IsTemporal()` throws
   `InvalidOperationException` naming the entity.

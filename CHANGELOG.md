@@ -66,3 +66,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   stale snapshot back as the current version. `Version<T>.Entity` is covered too. Copying values onto
   a fresh instance, or onto one from `DbSet.Find()` / a normal query, is unaffected. No new public
   API.
+- Removing a property from a temporal entity now keeps its history column (DESIGN.md D6, golden
+  rule 3). `dotnet ef migrations add` drops the column from the main table only; on the history table
+  the column stays, forced nullable, and is tagged `Hindsight:Orphaned` in the model. The convention
+  learns which columns to keep by reading the previous `ModelSnapshot`, so no migration ever emits a
+  `DropColumn` / `DropTable` / narrowing `AlterColumn` on a history table. Removing a **primary-key**
+  property from a temporal entity throws `InvalidOperationException` — the history version index and
+  the writer's close-previous-version step need the key columns. No new public API.

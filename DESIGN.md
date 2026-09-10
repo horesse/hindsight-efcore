@@ -124,11 +124,27 @@ a delete is meant to be read (D12).
 ## D6. Schema evolution
 
 - Column added to the entity → convention adds it to history → differ emits `AddColumn` for both.
-- Column removed → **history keeps it**, altered to nullable. Implementation: history columns absent
-  from the entity carry `Hindsight:Orphaned`; the differ's `DropColumn` for them is replaced by
-  `AlterColumn ... nullable`. Fallback if intercepting the differ proves brittle: persist the history
-  column list in a model annotation (it survives in `ModelSnapshot`) and rebuild orphaned columns from it.
-- Column renamed → new column in history, old one stays nullable. No rename magic.
+- Column removed → **history keeps it, as a nullable orphaned column — resolved by spike, 2026-09-10.**
+  The differ itself cannot be intercepted on public API (the only seam is a custom
+  `IMigrationsModelDiffer`, whose interface's implementation namespace is
+  `Microsoft.EntityFrameworkCore.Migrations.Internal` — golden rule 1). So the column is never allowed
+  to disappear from the model in the first place. On every model build `HistoryEntityTypeConvention`
+  resolves `IMigrationsAssembly.ModelSnapshot` (public API) and, for every property on the *previous*
+  snapshot's history entity type that has no live source property behind it now, re-adds it to the
+  current history entity type as a nullable shadow property tagged `Hindsight:Orphaned`, copying its
+  store type / value converter / precision / scale / length straight from the snapshot property. The
+  differ then sees no change (the column is still there and D5 already made it nullable), so it emits
+  no `DropColumn` / `DropTable` / narrowing `AlterColumn` on a history table. Orphans accumulate
+  across successive removals (each snapshot carries the previous ones); a re-run with no model change
+  scaffolds an empty migration. Removing a **primary-key** property from a temporal entity throws
+  `InvalidOperationException` — the history version index and the writer's close-previous-version step
+  depend on the key columns. Building the snapshot model re-runs the finalizing conventions, so a
+  thread-static guard stops the re-entrant pass from resolving the snapshot again. Nothing is
+  intercepted, no differ subclass, no new public surface. Covered by `OrphanedHistoryColumnTests`
+  (unit, incl. an `IMigrationsModelDiffer` assertion) and `HistoryColumnRetentionTests` (applies the
+  generated DDL to real PostgreSQL and inspects `information_schema`).
+- Column renamed → new column in history, old one stays as a nullable orphan (same mechanism). No
+  rename magic.
 - Existing non-empty table made temporal → v1.1 (`INSERT ... SELECT` seeding the initial version).
 
 ## D7. Historical queries are always no-tracking
@@ -280,5 +296,4 @@ store type appears that the `EF.Property<T>` projection cannot round-trip.
 
 ## Open questions (resolve in the spike, then move up)
 
-- Does a `DropColumn` on the history table get through the differ in a way we can intercept
-  without touching internals?
+_None open._

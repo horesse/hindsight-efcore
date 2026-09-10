@@ -26,6 +26,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - `HistoryWriter` enum and `UseHindsight(h => h.UseHistoryWriter(...))` to choose the writer. The
   default and only implemented writer is `HistoryWriter.Interceptor`; `HistoryWriter.Trigger` throws
   `NotSupportedException` until a later release.
-- `HistoryWriter.Interceptor` does not see `ExecuteUpdate` / `ExecuteDelete` / raw SQL (DESIGN.md D4),
-  and the change-context columns (`changed_by`, `correlation_id`, `reason`, …) are written `NULL`
-  until the change-context provider ships.
+- `HistoryWriter.Interceptor` does not see `ExecuteUpdate` / `ExecuteDelete` / raw SQL (DESIGN.md D4).
+- Change context: `IChangeContextProvider` and `UseHindsight(h => h.WithChangeContext<T>())`. When a
+  provider is registered, `HistoryWriter.Interceptor` calls it once per `SaveChanges` and writes the
+  returned `ChangeContext` (`UserId`, `UserName`, `CorrelationId`, `Reason`, `Extra` JSON) into the
+  `changed_by`, `changed_by_name`, `correlation_id`, `reason` and `extra` columns of that call's
+  history rows. Without a provider those columns stay `NULL` and `SaveChanges` still succeeds.
+  `DbContext.WithReason("…")` opens a scope that overrides the reason for the `SaveChanges` calls
+  inside it. Hindsight ships no default provider.

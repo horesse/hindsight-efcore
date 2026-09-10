@@ -57,10 +57,27 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
   `GREATEST(now(), prev.valid_from + interval '1 microsecond')` so concurrent transactions never
   produce negative intervals. Needs only table ownership — no superuser, no extension.
 
-Change context (user id, user name, correlation id, reason, extra) is pushed once per transaction via
-`set_config('hindsight.<key>', value, true)` (transaction-local) from an `IDbTransactionInterceptor`;
-the trigger reads it with `current_setting(..., true)`. This costs one round-trip per transaction and
-is measured in the benchmarks.
+Change context (user id, user name, correlation id, reason, extra) is supplied by the application
+through an `IChangeContextProvider`, registered with `UseHindsight(h => h.WithChangeContext<T>())`.
+
+- `Interceptor`: the provider is called **once per `SaveChanges`**, in `SavingChanges` alongside the
+  timestamp, and its `ChangeContext` is captured into the cross-hook state (never a field). In
+  `SavedChanges` the values go straight into the `INSERT` of each new history version — the "close
+  previous version" `UPDATE` does not touch them, so an old row keeps the context it was written with.
+  No provider registered → the columns are `NULL` and `SaveChanges` still succeeds; a provider
+  exception propagates and the transaction rolls back. `DbContext.WithReason(string)` opens an
+  `AsyncLocal` scope whose reason overrides `ChangeContext.Reason` for the enclosed `SaveChanges`
+  calls. `ChangeContext.Extra` is a caller-serialised JSON string written through the `extra` column's
+  `jsonb` type mapping — the package takes no serialisation dependency.
+- `Trigger`: the same `ChangeContext` is pushed once per transaction via
+  `set_config('hindsight.<key>', value, true)` (transaction-local) from an `IDbTransactionInterceptor`;
+  the trigger reads it with `current_setting(..., true)`. This costs one round-trip per transaction and
+  is measured in the benchmarks.
+
+`GetChangeContext` is synchronous: it runs inside both `SaveChanges` and `SaveChangesAsync`, and
+blocking on an async source there would be sync-over-async. The provider type is resolved per
+`SaveChanges` from `CoreOptionsExtension.ApplicationServiceProvider` (as `TimeProvider` is), falling
+back to a parameterless constructor; no EF-internal service provider, no reflection on the per-row path.
 
 The original design argument "a trigger can't know the user" is false — that's exactly what
 `set_config` is for. Trigger is the recommended mode; Interceptor stays as a reference implementation

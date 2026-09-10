@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Hindsight.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +22,11 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // context, removed in SavedChanges / SaveChangesFailed. Deliberately not a plain field — the
     // interceptor is shared between contexts and a field would race (CLAUDE.md rule 5).
     private readonly ConditionalWeakTable<DbContext, SaveState> _pending = new();
+
+    // Parameterless-constructor factories for change context providers that are not registered in the
+    // application service provider. Compiled once per type, not per SaveChanges (library-code rule:
+    // no reflection on the hot path).
+    private static readonly ConcurrentDictionary<Type, Func<object>> _providerActivators = new();
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -116,7 +122,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
 
     private void Prepare(DbContext context)
     {
-        var rows = Snapshot(context, out var timestamp);
+        var rows = Snapshot(context, out var timestamp, out var changeContext);
         if (rows is null)
         {
             return;
@@ -126,12 +132,12 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             ? context.Database.BeginTransaction()
             : null;
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, rows, ownedTransaction));
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
     }
 
     private async Task PrepareAsync(DbContext context, CancellationToken cancellationToken)
     {
-        var rows = Snapshot(context, out var timestamp);
+        var rows = Snapshot(context, out var timestamp, out var changeContext);
         if (rows is null)
         {
             return;
@@ -141,12 +147,14 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             ? await context.Database.BeginTransactionAsync(cancellationToken)
             : null;
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, rows, ownedTransaction));
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
     }
 
-    private IReadOnlyList<PendingHistoryRow>? Snapshot(DbContext context, out DateTimeOffset timestamp)
+    private IReadOnlyList<PendingHistoryRow>? Snapshot(
+        DbContext context, out DateTimeOffset timestamp, out ChangeContext changeContext)
     {
         timestamp = default;
+        changeContext = ChangeContext.Empty;
 
         // A stale entry means a previous SaveChanges threw between SavingChanges and its terminal
         // hook, or a nested save is running. Drop it and start fresh.
@@ -159,7 +167,59 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
 
         timestamp = ResolveTimeProvider(context).GetUtcNow();
+        changeContext = CaptureChangeContext(context);
         return rows;
+    }
+
+    // One provider call per SaveChanges (never per row), taken here alongside the timestamp. A reason
+    // set with DbContext.WithReason(...) overrides whatever the provider put in ChangeContext.Reason.
+    private static ChangeContext CaptureChangeContext(DbContext context)
+    {
+        var changeContext = ResolveChangeContextProvider(context)?.GetChangeContext(context)
+            ?? ChangeContext.Empty;
+
+        if (ChangeReasonScope.Current is { } scopedReason)
+        {
+            changeContext = changeContext with { Reason = scopedReason };
+        }
+
+        return changeContext;
+    }
+
+    private static IChangeContextProvider? ResolveChangeContextProvider(DbContext context)
+    {
+        var providerType = context.GetService<IDbContextOptions>()
+            .FindExtension<HindsightOptionsExtension>()
+            ?.ChangeContextProviderType;
+        if (providerType is null)
+        {
+            return null;
+        }
+
+        var applicationServiceProvider = context.GetService<IDbContextOptions>()
+            .FindExtension<CoreOptionsExtension>()
+            ?.ApplicationServiceProvider;
+
+        if (applicationServiceProvider?.GetService(providerType) is IChangeContextProvider fromServices)
+        {
+            return fromServices;
+        }
+
+        var activator = _providerActivators.GetOrAdd(providerType, CreateActivator);
+        return (IChangeContextProvider)activator();
+    }
+
+    private static Func<object> CreateActivator(Type providerType)
+    {
+        if (providerType.GetConstructor(Type.EmptyTypes) is null)
+        {
+            throw new InvalidOperationException(
+                $"Change context provider '{providerType.FullName}' is not registered on the "
+                + "application service provider and has no parameterless constructor. Register it with "
+                + "the DbContext's application service provider, or give it a parameterless constructor.");
+        }
+
+        return () => Activator.CreateInstance(providerType)!;
     }
 
     private static void Complete(DbContext context, SaveState state)
@@ -167,7 +227,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         try
         {
             HistoryRowPlan.FillGeneratedValues(state.Rows);
-            HistoryRowWriter.Write(context, state.Timestamp, state.Rows);
+            HistoryRowWriter.Write(context, state.Timestamp, state.ChangeContext, state.Rows);
             state.OwnedTransaction?.Commit();
         }
         catch
@@ -186,7 +246,8 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         try
         {
             HistoryRowPlan.FillGeneratedValues(state.Rows);
-            await HistoryRowWriter.WriteAsync(context, state.Timestamp, state.Rows, cancellationToken);
+            await HistoryRowWriter.WriteAsync(
+                context, state.Timestamp, state.ChangeContext, state.Rows, cancellationToken);
 
             if (state.OwnedTransaction is { } transaction)
             {
@@ -213,6 +274,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
 
     private sealed record SaveState(
         DateTimeOffset Timestamp,
+        ChangeContext ChangeContext,
         IReadOnlyList<PendingHistoryRow> Rows,
         IDbContextTransaction? OwnedTransaction);
 }

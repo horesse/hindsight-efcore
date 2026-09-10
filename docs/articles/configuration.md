@@ -50,21 +50,54 @@ from there and falls back to `TimeProvider.System`.
 
 ## Context configuration
 
-> [!NOTE]
-> Not implemented yet. The shape below is the v1 target. The `changed_by`, `changed_by_name`,
-> `correlation_id`, `reason` and `extra` history columns are written `NULL` until it ships.
+Every history row has five context columns — `changed_by`, `changed_by_name`, `correlation_id`,
+`reason` and `extra` (`jsonb`) — that record *who* made a change and *why*. They are written `NULL`
+unless you register an <xref:Hindsight.IChangeContextProvider>.
 
 ```csharp
-options.UseHindsight(h => h
-    .WithChangeContext<MyChangeContextProvider>()
-    .UseHistoryWriter(HistoryWriter.Interceptor));
+public sealed class HttpChangeContextProvider(IHttpContextAccessor accessor) : IChangeContextProvider
+{
+    public ChangeContext GetChangeContext(DbContext context)
+    {
+        var user = accessor.HttpContext?.User;
+        return new ChangeContext
+        {
+            UserId = user?.FindFirst("sub")?.Value,
+            UserName = user?.Identity?.Name,
+            CorrelationId = Activity.Current?.TraceId.ToString(),
+            Extra = """{"source":"web"}""",
+        };
+    }
+}
 ```
 
-`WithChangeContext<T>` registers an `IChangeContextProvider`. The default provider reads
-`ClaimsPrincipal` from `IHttpContextAccessor` when it is registered and `Activity.Current?.TraceId`
-for the correlation id.
+```csharp
+services.AddHttpContextAccessor();
+services.AddScoped<HttpChangeContextProvider>();
 
-A reason for a specific operation is set with a scope:
+services.AddDbContext<AppDbContext>(o => o
+    .UseNpgsql(connectionString)
+    .UseHindsight(h => h
+        .WithChangeContext<HttpChangeContextProvider>()
+        .UseHistoryWriter(HistoryWriter.Interceptor)));
+```
+
+`WithChangeContext<T>` registers the provider type. With `HistoryWriter.Interceptor` the provider is
+called **once per `SaveChanges`** — never once per row — after the tracked changes are snapshotted and
+before any history row is written, and its <xref:Hindsight.ChangeContext> is stamped onto every
+history row that call produces. The provider is resolved from the application service provider (so it
+can take dependencies); a provider with a parameterless constructor is created directly. An exception
+from the provider propagates out of `SaveChanges` and the whole transaction, data change included,
+rolls back. Hindsight ships no default provider — `IHttpContextAccessor` / `ClaimsPrincipal` mapping
+like the sample above is application code.
+
+Each `ChangeContext` member maps to one column: `UserId` → `changed_by`, `UserName` →
+`changed_by_name`, `CorrelationId` → `correlation_id`, `Reason` → `reason`, `Extra` → `extra`. A
+`null` member leaves that column `null`. `Extra` is written verbatim into the `jsonb` column, so it
+must be valid JSON — the provider owns serialization.
+
+A reason for a specific operation is set with a scope, overriding `ChangeContext.Reason` for the
+`SaveChanges` calls inside it:
 
 ```csharp
 using (db.WithReason("Backdated correction after audit"))
@@ -73,6 +106,8 @@ using (db.WithReason("Backdated correction after audit"))
     await db.SaveChangesAsync();
 }
 ```
+
+`WithReason` works with or without a provider registered; scopes nest and the innermost one wins.
 
 ## Model validation
 

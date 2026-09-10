@@ -20,24 +20,17 @@ public sealed class HindsightOptionsBuilder
 
     /// <summary>
     /// Chooses the history writer. The default, if this is never called, is
-    /// <see cref="HistoryWriter.Interceptor"/>.
+    /// <see cref="HistoryWriter.Interceptor"/>; <see cref="HistoryWriter.Trigger"/> is recommended in
+    /// production. Both produce the same history schema and the same half-open intervals — see
+    /// <see cref="HistoryWriter"/> for the trade-offs.
     /// </summary>
     /// <param name="writer">The writer to use.</param>
     /// <returns>The same builder instance so that calls can be chained.</returns>
-    /// <exception cref="System.NotSupportedException">
-    /// <paramref name="writer"/> is <see cref="HistoryWriter.Trigger"/>. The trigger writer is not
-    /// implemented yet; it arrives in a later release. Use <see cref="HistoryWriter.Interceptor"/>.
+    /// <exception cref="System.ArgumentOutOfRangeException">
+    /// <paramref name="writer"/> is not a defined <see cref="HistoryWriter"/> value.
     /// </exception>
     public HindsightOptionsBuilder UseHistoryWriter(HistoryWriter writer)
     {
-        if (writer == HistoryWriter.Trigger)
-        {
-            throw new NotSupportedException(
-                "HistoryWriter.Trigger is not implemented yet; it arrives in a later release. "
-                + "Use HistoryWriter.Interceptor (the default), which snapshots tracked entities in a "
-                + "SaveChangesInterceptor and writes history rows in the same transaction.");
-        }
-
         if (!Enum.IsDefined(writer))
         {
             throw new ArgumentOutOfRangeException(nameof(writer), writer, "Unknown history writer.");

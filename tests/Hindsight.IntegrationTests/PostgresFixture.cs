@@ -8,7 +8,12 @@ namespace Hindsight.IntegrationTests;
 /// </summary>
 public sealed class PostgresFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    // Every test gets its own database on this one container, and each keeps its own Npgsql pool. Raise
+    // the server's connection ceiling and keep the per-database pools small and short-lived so a long
+    // sequential run does not accumulate idle connections past max_connections.
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:17-alpine")
+        .WithCommand("-c", "max_connections=400")
+        .Build();
 
     public string AdminConnectionString => _container.GetConnectionString();
 
@@ -24,7 +29,13 @@ public sealed class PostgresFixture : IAsyncLifetime
         command.CommandText = $"CREATE DATABASE \"{name}\"";
         await command.ExecuteNonQueryAsync(cancellationToken);
 
-        var builder = new Npgsql.NpgsqlConnectionStringBuilder(AdminConnectionString) { Database = name };
+        var builder = new Npgsql.NpgsqlConnectionStringBuilder(AdminConnectionString)
+        {
+            Database = name,
+            MaxPoolSize = 5,
+            ConnectionIdleLifetime = 2,
+            ConnectionPruningInterval = 1,
+        };
         return builder.ConnectionString;
     }
 }

@@ -24,9 +24,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   version and records a tombstone row (`operation = 3`, empty interval), so a deleted entity has no
   open history row. A `SaveChanges` that touched only excluded properties writes nothing.
 - `HistoryWriter` enum and `UseHindsight(h => h.UseHistoryWriter(...))` to choose the writer. The
-  default and only implemented writer is `HistoryWriter.Interceptor`; `HistoryWriter.Trigger` throws
-  `NotSupportedException` until a later release.
-- `HistoryWriter.Interceptor` does not see `ExecuteUpdate` / `ExecuteDelete` / raw SQL (DESIGN.md D4).
+  default is `HistoryWriter.Interceptor`.
+- `HistoryWriter.Trigger` is now implemented and recommended in production. Selecting it makes the
+  migration generate a `<history_table>_write()` plpgsql function and an
+  `AFTER INSERT OR UPDATE OR DELETE` `<history_table>_trg` trigger on the main table, from the same
+  `Hindsight:*` annotations the history table is built from. It produces the same history schema and
+  the same half-open intervals as the interceptor, uses `now()` for the timestamp (one per
+  transaction), closes the previous version with
+  `GREATEST(now(), valid_from + interval '1 microsecond')` so racing transactions stay contiguous, and
+  needs only table ownership — no superuser, no extension. Because it lives in the database it also
+  records history for `ExecuteUpdate` / `ExecuteDelete` and raw SQL (DESIGN.md D4). A later migration
+  that adds, drops or renames a column on a temporal entity re-emits `CREATE OR REPLACE FUNCTION`; no
+  migration ever drops the function's history table. Under the trigger writer, an `UPDATE` that sets a
+  versioned column to its current value writes no history row.
+- `HistoryWriter.Interceptor` does not see `ExecuteUpdate` / `ExecuteDelete` / raw SQL (DESIGN.md D4);
+  `HistoryWriter.Trigger` does.
+- Change context under `HistoryWriter.Trigger`: the registered `IChangeContextProvider` is called once
+  per `SaveChanges` that writes a temporal entity, and its `ChangeContext` is pushed into the
+  transaction with `set_config('hindsight.<key>', value, true)` for the trigger to read back with
+  `current_setting(..., true)`. Hindsight opens a transaction for that `SaveChanges` if the caller has
+  none. `DbContext.WithReason("…")` works the same as in interceptor mode. Bulk writes get history
+  rows with `NULL` context columns.
 - Change context: `IChangeContextProvider` and `UseHindsight(h => h.WithChangeContext<T>())`. When a
   provider is registered, `HistoryWriter.Interceptor` calls it once per `SaveChanges` and writes the
   returned `ChangeContext` (`UserId`, `UserName`, `CorrelationId`, `Reason`, `Extra` JSON) into the

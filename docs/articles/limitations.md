@@ -29,9 +29,14 @@
 
 ## Known trade-offs
 
-- `HistoryWriter.Interceptor` cannot see `ExecuteUpdate`, `ExecuteDelete`, raw SQL, or writes from other
-  processes. `HistoryWriter.Trigger` will cover that; it is not implemented yet, so today this is a
-  hard limitation, not a choice.
+- `HistoryWriter.Interceptor` cannot see `ExecuteUpdate`, `ExecuteDelete`, raw SQL, or writes from
+  other processes — they write no history. `HistoryWriter.Trigger` covers all of them (the trigger is
+  in the database); switch to it if that matters. Under the trigger writer those paths still record
+  history but with `NULL` change-context columns, since no `ChangeContext` is pushed for a write that
+  does not go through `SaveChanges`.
+- The two writers differ in two observable ways: the interceptor timestamps from `TimeProvider` (so
+  tests can inject time) while the trigger uses `now()`; and an `UPDATE` that assigns a versioned
+  column its current value writes a history row under the interceptor but not under the trigger.
 - The change-context columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`)
   are written `NULL` unless an `IChangeContextProvider` is registered
   (`UseHindsight(h => h.WithChangeContext<T>())`). Hindsight ships no default provider.

@@ -1,19 +1,26 @@
 using Hindsight.Conventions;
+using Hindsight.Migrations;
 using Hindsight.Query;
 using Hindsight.Writers;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata.Conventions.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Migrations;
 
 namespace Hindsight.Infrastructure;
 
 /// <summary>
-/// The <see cref="IDbContextOptionsExtension"/> that <c>UseHindsight()</c> adds. It registers
-/// <see cref="HindsightConventionSetPlugin"/> so the history entity types are built into the model,
-/// and — for <see cref="HistoryWriter.Interceptor"/> — the <see cref="HistoryWriterInterceptor"/>
-/// that writes history rows on <c>SaveChanges</c>.
+/// The <see cref="IDbContextOptionsExtension"/> that <c>UseHindsight()</c> adds. It always registers
+/// <see cref="HindsightConventionSetPlugin"/> so the history entity types are built into the model, the
+/// <see cref="HistorySnapshotGuardInterceptor"/> and the <see cref="HindsightQueryExpressionInterceptor"/>.
+/// For <see cref="HistoryWriter.Interceptor"/> it also registers the <see cref="HistoryWriterInterceptor"/>
+/// that writes history rows on <c>SaveChanges</c>; for <see cref="HistoryWriter.Trigger"/> it instead
+/// registers the <see cref="HindsightMigrationsSqlGenerator"/> that generates the history trigger and the
+/// <see cref="HistoryTriggerContextInterceptor"/> that pushes the change context into the transaction.
 /// </summary>
 internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
 {
@@ -57,9 +64,27 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
         services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IInterceptor, HistorySnapshotGuardInterceptor>());
         services.TryAddEnumerable(
-            ServiceDescriptor.Scoped<IInterceptor, HistoryWriterInterceptor>());
-        services.TryAddEnumerable(
             ServiceDescriptor.Scoped<IInterceptor, HindsightQueryExpressionInterceptor>());
+
+        if (HistoryWriter == HistoryWriter.Trigger)
+        {
+            // The trigger does the writing; the app only needs to push the change context into the
+            // transaction, and the migration needs to grow the trigger DDL (DESIGN.md D3).
+            services.TryAddEnumerable(
+                ServiceDescriptor.Scoped<IInterceptor, HistoryTriggerContextInterceptor>());
+
+            // Decorate the provider's generator: resolve NpgsqlMigrationsSqlGenerator (public type) as a
+            // concrete service — DI fills its constructor, including the internal option — and wrap it.
+            services.AddScoped<NpgsqlMigrationsSqlGenerator>();
+            services.AddScoped<IMigrationsSqlGenerator>(serviceProvider => new HindsightMigrationsSqlGenerator(
+                serviceProvider.GetRequiredService<NpgsqlMigrationsSqlGenerator>(),
+                serviceProvider.GetRequiredService<ISqlGenerationHelper>()));
+        }
+        else
+        {
+            services.TryAddEnumerable(
+                ServiceDescriptor.Scoped<IInterceptor, HistoryWriterInterceptor>());
+        }
     }
 
     public void Validate(IDbContextOptions options)

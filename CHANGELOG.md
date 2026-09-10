@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 ### Added
 
 - Repository scaffold: solution, packaging, CI, release workflow.
+- Benchmark numbers comparing `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` against plain
+  EF Core — `SaveChanges` insert / update / delete overhead and the cost of attaching a change
+  context — in `README.md` and the History writers guide. Run with
+  `dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'` (needs Docker).
 - `IsTemporal()` fluent configuration writing `Hindsight:*` annotations.
 - `UseHindsight()` on `DbContextOptionsBuilder`: enables the model-finalizing convention that
   generates a property-bag history entity type for every `IsTemporal()` entity, so

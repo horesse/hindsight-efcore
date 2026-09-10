@@ -92,7 +92,20 @@ Historical queries are always no-tracking; treat the results as read-only snapsh
 | Change context (user, correlation id, reason) | ✅ | ✅ via `set_config` in the same transaction |
 
 Recommendation: **Trigger** in production. Interceptor exists for environments where you cannot
-create trigger functions at all, and as a reference implementation. Benchmarks will be here.
+create trigger functions at all, and as a reference implementation.
+
+Overhead a 100-row `SaveChanges` adds over plain EF Core (mean, one PostgreSQL 17 container):
+
+| | insert | update | delete |
+|---|--:|--:|--:|
+| `HistoryWriter.Interceptor` | +63 ms | +111 ms | +113 ms |
+| `HistoryWriter.Trigger` | +3 ms | +5 ms | +5 ms |
+
+The interceptor issues one `UPDATE` + one `INSERT` on the history table **per row** after the save,
+so its cost scales with batch size; the trigger writes history in the database inside the same
+statement. Measured on a Ryzen 7 7800X3D, .NET 10, PostgreSQL 17 — **your numbers will differ**.
+Full tables and method in [History writers](docs/articles/history-writers.md#benchmarks); re-run with
+`dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'`.
 
 ## Schema evolution
 

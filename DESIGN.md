@@ -118,7 +118,8 @@ zero open versions, but the row still records *when* the delete happened and (on
 provider ships) *who* did it, which a bare "close the last version" would lose and which the Trigger
 writer's `AFTER DELETE` would record anyway. `AllVersions()` also excludes it (`operation <> 3`): it
 carries the pre-delete column values but an empty interval, so it is a delete marker, not a state
-version (D12).
+version (D12). `History<T>()` is the one reader that returns it — that is where the *when* / *who* of
+a delete is meant to be read (D12).
 
 ## D6. Schema evolution
 
@@ -179,6 +180,32 @@ The projection, the `AsNoTracking`, and every guard (first operator, non-tempora
   `OrderBy` / `OrderByDescending` replaces the default (standard LINQ — EF drops the overridden
   `ORDER BY`), a trailing `ThenBy` keeps newest-first primary.
 
+**`History<T>()` uses the same mechanism, wrapping the entity in `Version<TEntity>` (added
+2026-09-10).** `db.History<Policy>()` is an extension on `DbContext` (not `DbSet` — the doc shape
+`db.History<Policy>()` won, and there is nothing a caller could put "before" a `DbContext`); it
+builds `context.Set<TEntity>()` + a `MarkHistory` marker and lets the same hook rewrite it. The
+history source has **no filter at all** and is ordered
+`OrderByDescending(valid_from).ThenByDescending(history_id)`; the projection is a nested member-init
+`h => new Version<TEntity> { Entity = new TEntity { … }, ValidFrom = (DateTimeOffset)…, ValidTo = …,
+Operation = (VersionOperation)…, ChangedBy = …, … }`, then `AsNoTracking()`. Every guard (first
+operator, non-temporal, `Include`, `AsTracking`, TPH, owned/complex) and `BuildBindings` for the
+inner entity are shared with `AsOf` / `AllVersions` in `HistoryQueryRootRewriter`.
+- **Tombstone included.** This is the one place it should be: `History<T>()` is the audit view, and
+  the `operation = 3` row carries *when* and *who* of a delete (D5). It comes back as a `Version`
+  with `Operation == VersionOperation.Delete`, `ValidFrom == ValidTo` (empty interval) and
+  `IsCurrent == false`.
+- **`history_id DESC` secondary sort.** The identity surrogate key is the only thing that always
+  separates two rows written in one transaction (the delete's "close previous version" `UPDATE`
+  keeps its row's `valid_from`, the tombstone `INSERT` gets a fresh `history_id`), so it makes the
+  order a stable total order for interval assertions in tests.
+- **`ValidFrom` / `ValidTo` are `DateTimeOffset`.** The history columns are `timestamptz` mapped as
+  `DateTime` (UTC); the projection casts with `(DateTimeOffset)`, which EF translates as
+  `p.valid_from::timestamptz`. The open version's `valid_to` is `'infinity'`, which Npgsql surfaces
+  as `DateTimeOffset.MaxValue`; `Version<T>.IsCurrent` is `ValidTo == DateTimeOffset.MaxValue` — no
+  magic `null` (D5). `Operation` is a new public `enum VersionOperation : short { Insert = 1,
+  Update = 2, Delete = 3 }` (mirrors the internal `HistoryOperation`; kept separate so the writer
+  enum stays internal).
+
 **The spike question — does root replacement survive composition with `Where`/`OrderBy`/`Select`/
 `First`? — is answered yes.** `db.Policies.AsOf(t).Where(p => p.Premium > 0).OrderBy(p => p.Number)
 .Select(p => p.Status).First()` compiles to one statement —
@@ -192,16 +219,24 @@ at `valid_from`; deleted-entity tombstone never matched; composite key; enum-as-
 first; `Where` / `Select` / `Count` composition; the caller `OrderBy` replacing the default order;
 the tombstone excluded after a delete; composite key; enum / `jsonb` / `text[]` round-trip;
 `Concat` of `AllVersions()` and `AsOf()` in one tree; and every guard. Its canonical SQL
-(`… WHERE operation <> 3 AND … ORDER BY valid_from DESC`) has a Verify snapshot. The shared rewrite
+(`… WHERE operation <> 3 AND … ORDER BY valid_from DESC`) has a Verify snapshot.
+`HistoryQueryTests` covers `History<T>()`: every row returned including the tombstone, newest first;
+contiguous intervals with `IsCurrent` only on the open one; the empty-interval tombstone; `Where` on
+an `Entity` property and a `Select` mixing metadata and `Entity` properties each producing **one**
+SQL query (no client evaluation — the nested member-init projection composes); the change-context
+columns via a registered `IChangeContextProvider`; composite key; enum / `jsonb` / `text[]` on the
+`Entity` snapshot; no-tracking; and every guard. Its canonical SQL (all entity + period + context
+columns, `ORDER BY valid_from DESC, history_id DESC`) has a Verify snapshot. The shared rewrite
 lives in `HistoryQueryRootRewriter`; the marker scan and Include/AsTracking rejection in
-`HindsightQueryExpressionInterceptor` recognise both markers.
+`HindsightQueryExpressionInterceptor` recognise all three markers.
 
 `FromSql` (the fallback named below) also composes, but stays the fallback: it forces every mapped
 property into the `SELECT` list, so an `Exclude()`-d non-nullable column needs a sentinel value in
 the SQL — meaningless data in a real column, which rule 2 discourages.
 
-Two things root replacement does not give for free, both handled in the rewrite (for `AsOf` and
-`AllVersions` alike):
+Two things root replacement does not give for free, both handled in the rewrite (for `AsOf`,
+`AllVersions` and `History<T>` alike — for `History<T>` the mapped entity is nested inside the
+`Version<TEntity>` the `Select` produces, and EF tracks it just the same):
 - **No-tracking (D7).** A `Select` that materialises a mapped entity with all key properties set is
   tracked by EF, so the rewrite appends `AsNoTracking()`. `.AsTracking()` throws — the hook
   rejects an explicit tracking operator rather than let it override.
@@ -209,8 +244,9 @@ Two things root replacement does not give for free, both handled in the rewrite 
   after `Select`; the hook detects `Include` / `ThenInclude` next to a history marker first and
   throws `NotSupportedException` naming D8.
 
-Further rules the hook enforces (both markers): the marker must be the first operator on the query
-(else `InvalidOperationException` — move it before `Where`/`OrderBy`/…); on a non-temporal entity it
+Further rules the hook enforces (all three markers): the marker must be the first operator on the
+query (else `InvalidOperationException` — move it before `Where`/`OrderBy`/…; not reachable for
+`History<T>()`, which starts from the `DbContext`); on a non-temporal entity it
 throws `InvalidOperationException` naming the entity; on an inheritance hierarchy (D9) or an
 entity with owned / complex members it throws `NotSupportedException` (those column sets are not
 reconstructable from the history table — use `FromSql`). Not done here: blocking a re-attached

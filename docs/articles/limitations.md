@@ -8,13 +8,12 @@
   with a second `AsOf()` query.
 - **`AsOf()` not first in the query** — `db.Set<T>().Where(...).AsOf(t)` throws; `AsOf` must be the
   first operator, on the `DbSet` itself.
-- **`AsOf()` on owned / complex / inherited entities** — throws `NotSupportedException`: those column
-  sets are not reconstructable from the history table in v1. Use `FromSql` against the history table.
-- **`History<T>()`** — the version-metadata query (period columns plus `operation` / `changed_by` /
-  `reason` / …) is not implemented yet. `AsOf()` and `AllVersions()` read the versioned columns.
-- **Restoring** an entity to a previous version — history is read-only. An `AsOf()` snapshot is
-  detached and no-tracking; re-attaching one and calling `SaveChanges` is not currently blocked, so
-  treat historical results as read-only.
+- **`AsOf()` / `AllVersions()` / `History<T>()` on owned / complex / inherited entities** — throws
+  `NotSupportedException`: those column sets are not reconstructable from the history table in v1. Use
+  `FromSql` against the history table.
+- **Restoring** an entity to a previous version — history is read-only. An `AsOf()` /
+  `AllVersions()` / `History<T>()` snapshot is detached and no-tracking; re-attaching one and calling
+  `SaveChanges` is not currently blocked, so treat historical results as read-only.
 - **TPH hierarchies** — rejected at model validation.
 - **Owned collections** inside temporal entities — owned references and complex properties are
   supported for writing history (their columns live in the same table), owned collections are not.

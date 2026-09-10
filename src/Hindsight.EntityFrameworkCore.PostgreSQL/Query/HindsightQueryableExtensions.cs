@@ -15,6 +15,9 @@ public static class HindsightQueryableExtensions
     internal static readonly MethodInfo AllVersionsMethod = typeof(HindsightQueryableExtensions)
         .GetMethod(nameof(MarkAllVersions), BindingFlags.NonPublic | BindingFlags.Static)!;
 
+    internal static readonly MethodInfo HistoryMethod = typeof(HindsightQueryableExtensions)
+        .GetMethod(nameof(MarkHistory), BindingFlags.NonPublic | BindingFlags.Static)!;
+
     /// <summary>
     /// Returns each <typeparamref name="TEntity"/> as it stood at <paramref name="asOf"/>, read from
     /// the entity's Hindsight history table instead of the current table. Use it to answer "what did
@@ -113,6 +116,58 @@ public static class HindsightQueryableExtensions
                 source.Expression));
     }
 
+    /// <summary>
+    /// Returns every stored version of each <typeparamref name="TEntity"/> as a
+    /// <see cref="Version{TEntity}"/> — the entity snapshot for that version plus the version's
+    /// system-time period (<see cref="Version{TEntity}.ValidFrom"/> / <see cref="Version{TEntity}.ValidTo"/>)
+    /// and change-context metadata (<see cref="Version{TEntity}.Operation"/>,
+    /// <see cref="Version{TEntity}.ChangedBy"/>, <see cref="Version{TEntity}.Reason"/>, …). Use it for
+    /// an audit trail, a "who changed this and when" screen, or a delete log — anything that needs the
+    /// version metadata and not just the column values that <see cref="AllVersions{TEntity}"/> returns.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One row per stored history row, <b>including the <c>delete</c> tombstone</b> (DESIGN.md D5),
+    /// which carries the <i>when</i> / <i>who</i> of a deletion as
+    /// <see cref="Version{TEntity}.Operation"/> <see cref="VersionOperation.Delete"/> with an empty
+    /// interval. Rows come back newest first (by <c>valid_from</c> descending, then insertion order);
+    /// adding your own <c>OrderBy</c> / <c>OrderByDescending</c> replaces that ordering.
+    /// </para>
+    /// <para>
+    /// The query is composed against the history table: <c>Where</c>, <c>OrderBy</c> and <c>Select</c>
+    /// over both the metadata members and <see cref="Version{TEntity}.Entity"/>'s properties
+    /// (<c>Where(v =&gt; v.Entity.Id == id)</c>) translate to a single SQL query. Results are always
+    /// no-tracking (DESIGN.md D7). Combining <c>History</c> with
+    /// <see cref="EntityFrameworkQueryableExtensions.Include{TEntity, TProperty}"/> or
+    /// <c>AsTracking</c> throws (DESIGN.md D8, D7).
+    /// </para>
+    /// </remarks>
+    /// <typeparam name="TEntity">The temporal entity type. It must be configured with
+    /// <see cref="TemporalEntityTypeBuilderExtensions.IsTemporal{TEntity}"/>.</typeparam>
+    /// <param name="context">A Hindsight-enabled <see cref="DbContext"/>.</param>
+    /// <returns>A queryable over every stored version, newest first.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Hindsight is not enabled on the context, or <typeparamref name="TEntity"/> is not temporal.
+    /// </exception>
+    /// <exception cref="NotSupportedException">
+    /// The query also uses <c>Include</c> / <c>ThenInclude</c> (DESIGN.md D8), or
+    /// <typeparamref name="TEntity"/> takes part in an inheritance hierarchy (DESIGN.md D9) or has
+    /// owned / complex members.
+    /// </exception>
+    public static IQueryable<Version<TEntity>> History<TEntity>(this DbContext context)
+        where TEntity : class
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        IQueryable<TEntity> source = context.Set<TEntity>();
+
+        return source.Provider.CreateQuery<Version<TEntity>>(
+            Expression.Call(
+                HistoryMethod.MakeGenericMethod(typeof(TEntity)),
+                source.Expression));
+    }
+
     // Marker only: HindsightQueryExpressionInterceptor rewrites the AsOf(...) call before compilation.
     // Reaching this body means the interceptor is not in the pipeline.
     private static IQueryable<TEntity> MarkAsOf<TEntity>(IQueryable<TEntity> source, DateTime asOfUtc)
@@ -128,6 +183,14 @@ public static class HindsightQueryableExtensions
         => throw new InvalidOperationException(
             "AllVersions() was not translated by Hindsight. Enable Hindsight on the DbContext with "
             + "options.UseHindsight(), and call AllVersions() on a DbSet of an entity configured with IsTemporal().");
+
+    // Marker only: HindsightQueryExpressionInterceptor rewrites the History<T>() call before compilation.
+    // Reaching this body means the interceptor is not in the pipeline.
+    private static IQueryable<Version<TEntity>> MarkHistory<TEntity>(IQueryable<TEntity> source)
+        where TEntity : class
+        => throw new InvalidOperationException(
+            "History<T>() was not translated by Hindsight. Enable Hindsight on the DbContext with "
+            + "options.UseHindsight(), and call History<T>() for an entity configured with IsTemporal().");
 
     private sealed class AsOfParameter(DateTime asOfUtc)
     {

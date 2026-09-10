@@ -49,3 +49,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   a single SQL query, always no-tracking, and the same `InvalidOperationException` /
   `NotSupportedException` guards for non-temporal entities, `Include`, `AsTracking`, inheritance and
   owned/complex members.
+- `db.History<T>()`: reads every stored version of a temporal entity as a `Version<T>` — the entity
+  snapshot plus the version's system-time period (`ValidFrom` / `ValidTo` as `DateTimeOffset`,
+  `IsCurrent` for the open one) and the change-context columns (`Operation`, `ChangedBy`,
+  `ChangedByName`, `CorrelationId`, `Reason`, `Extra`). Unlike `AllVersions()` it **includes the
+  `delete` tombstone** as `Version` with `Operation == VersionOperation.Delete` and an empty interval,
+  so it is the delete audit. Newest first (by `valid_from` descending, then `history_id`), replaceable
+  with your own `OrderBy`. `Where` and `Select` compose into a single SQL query through both the
+  metadata members and the `Entity` snapshot (`Where(v => v.Entity.Id == id)`), always no-tracking.
+  Same `InvalidOperationException` / `NotSupportedException` guards as `AsOf` / `AllVersions` for
+  non-temporal entities, `Include`, `AsTracking`, inheritance and owned/complex members. New public
+  `Version<TEntity>` and `VersionOperation` types.

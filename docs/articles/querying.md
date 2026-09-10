@@ -68,35 +68,64 @@ was open when it was deleted, and `AllVersions()` never returns a row for the de
 
 ## Version metadata: `History<T>`
 
-> [!WARNING]
-> `History<T>()` is not implemented yet. The snippet below is the intended shape; today `AsOf` and
-> `AllVersions` are the way to read history.
+"Who changed this policy, when, and why?"
+
+`AllVersions()` gives you the column values of every version. `History<Policy>()` gives you each
+version wrapped in a <xref:Hindsight.Version`1> — the entity snapshot **plus** the version's
+system-time period and the change-context columns:
 
 ```csharp
-// versions plus the "who / why" columns
 var audit = await db.History<Policy>()
     .Where(v => v.Entity.Id == id)
-    .OrderByDescending(v => v.ValidFrom)
     .Select(v => new { v.ValidFrom, v.ValidTo, v.Operation, v.ChangedBy, v.Reason, v.Entity.Status })
+    .ToListAsync();
+```
+
+It is an extension on `DbContext` (not on a `DbSet`), so you name the entity type:
+`db.History<Policy>()`. Each `Version<Policy>` carries:
+
+| member | source |
+|---|---|
+| `Entity` | the `Policy` snapshot for that version, reconstructed from the versioned columns |
+| `ValidFrom` / `ValidTo` | the half-open system-time period, `DateTimeOffset` in UTC |
+| `IsCurrent` | `true` when `ValidTo` is `DateTimeOffset.MaxValue` — the version live right now |
+| `Operation` | `VersionOperation.Insert` / `Update` / `Delete` |
+| `ChangedBy`, `ChangedByName`, `CorrelationId`, `Reason`, `Extra` | the change-context columns, or `null` when no `IChangeContextProvider` supplied them |
+
+Unlike `AllVersions()`, `History<T>()` **includes the `delete` tombstone** (DESIGN.md D5): a deleted
+row comes back as a `Version` with `Operation == VersionOperation.Delete` and an empty interval
+(`ValidFrom == ValidTo`), carrying the last column values and the change context of the deletion —
+this is the delete audit. Rows are newest first (by `valid_from` descending, then insertion order);
+your own `OrderBy` / `OrderByDescending` replaces that.
+
+Filtering and projection compose into one SQL query through both the metadata members and the entity
+snapshot — `Where(v => v.Entity.Id == id)` and `Select(v => new { v.ValidFrom, v.Entity.Status })`
+translate, no client evaluation:
+
+```csharp
+var deletions = await db.History<Policy>()
+    .Where(v => v.Operation == VersionOperation.Delete)
+    .Select(v => new { v.Entity.Number, v.ValidFrom, v.ChangedBy, v.Reason })
     .ToListAsync();
 ```
 
 ## Rules
 
-These apply to both `AsOf` and `AllVersions`.
+These apply to `AsOf`, `AllVersions` and `History<T>`.
 
 - **Always no-tracking.** Results are detached snapshots — the change tracker is untouched.
-  `AsOf(...).AsTracking()` / `AllVersions().AsTracking()` throws: a historical row is not something
-  you edit and save back.
-- **No `Include`.** `AsOf(...).Include(...)` / `AllVersions().Include(...)` throws
-  `NotSupportedException`. Reading a related entity from history is an interval join on two periods;
-  v1 refuses rather than return a result that looks right and is not (see
-  [DESIGN.md](../design.md) D8). Load the related rows with a second history query keyed on the
-  foreign key you already have.
-- **The history operator goes first.** `db.Policies.Where(...).AsOf(t)` throws — put `AsOf` /
-  `AllVersions` directly on the `DbSet`, before `Where` / `OrderBy` / `Select`.
+  `AsOf(...).AsTracking()` / `AllVersions().AsTracking()` / `History<Policy>().AsTracking()` throws: a
+  historical row is not something you edit and save back.
+- **No `Include`.** `AsOf(...).Include(...)` / `AllVersions().Include(...)` /
+  `History<Policy>().Include(...)` throws `NotSupportedException`. Reading a related entity from
+  history is an interval join on two periods; v1 refuses rather than return a result that looks right
+  and is not (see [DESIGN.md](../design.md) D8). Load the related rows with a second history query
+  keyed on the foreign key you already have.
+- **`AsOf` / `AllVersions` go first.** `db.Policies.Where(...).AsOf(t)` throws — put them directly on
+  the `DbSet`, before `Where` / `OrderBy` / `Select`. (`History<T>()` starts from the `DbContext`, so
+  there is nothing to put it after.)
 - **Standalone entities only.** An entity in an inheritance hierarchy, or one with owned or complex
   members, throws `NotSupportedException` — those shapes are not carried on the history table in v1.
   Read `policies_history` directly with `FromSql` for them.
-- **Temporal only.** `AsOf` / `AllVersions` on an entity that was never `IsTemporal()` throws
-  `InvalidOperationException` naming the entity.
+- **Temporal only.** `AsOf` / `AllVersions` / `History<T>()` on an entity that was never
+  `IsTemporal()` throws `InvalidOperationException` naming the entity.

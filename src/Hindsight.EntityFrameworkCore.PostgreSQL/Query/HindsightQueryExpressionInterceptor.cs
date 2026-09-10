@@ -28,7 +28,7 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         if (scan.HasInclude)
         {
             throw new NotSupportedException(
-                "AsOf() / AllVersions() cannot be combined with Include() / ThenInclude() in v1 (DESIGN.md D8): "
+                "AsOf() / AllVersions() / History<T>() cannot be combined with Include() / ThenInclude() in v1 (DESIGN.md D8): "
                 + "reading related entities from history is an interval join, and a silently wrong result would be "
                 + "worse than the missing feature. Load the related rows with a separate history query, or use FromSql.");
         }
@@ -36,21 +36,22 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         if (scan.HasTrackingOperator)
         {
             throw new InvalidOperationException(
-                "AsOf() / AllVersions() results are always no-tracking (DESIGN.md D7). Remove AsTracking() / "
+                "AsOf() / AllVersions() / History<T>() results are always no-tracking (DESIGN.md D7). Remove AsTracking() / "
                 + "AsTrackingWithIdentityResolution() from the query.");
         }
 
         var model = eventData.Context?.Model
             ?? throw new InvalidOperationException(
-                "AsOf() / AllVersions(): the query has no DbContext model to resolve the history table from.");
+                "AsOf() / AllVersions() / History<T>(): the query has no DbContext model to resolve the history table from.");
 
         return new HistoryQueryRootRewriter(model).Visit(queryExpression);
     }
 
     /// <summary>
-    /// One pass over the tree recording whether it uses <c>AsOf</c> or <c>AllVersions</c>, and — so
-    /// their combination can be rejected with a Hindsight message rather than a downstream EF one —
-    /// whether it also uses <c>Include</c> / <c>ThenInclude</c> or an explicit tracking operator.
+    /// One pass over the tree recording whether it uses <c>AsOf</c>, <c>AllVersions</c> or
+    /// <c>History&lt;T&gt;</c>, and — so their combination can be rejected with a Hindsight message
+    /// rather than a downstream EF one — whether it also uses <c>Include</c> / <c>ThenInclude</c> or
+    /// an explicit tracking operator.
     /// </summary>
     private sealed class MarkerScanner : ExpressionVisitor
     {
@@ -93,6 +94,7 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
 
         private static bool IsHistoryMarker(MethodInfo definition)
             => definition == HindsightQueryableExtensions.AsOfMethod
-                || definition == HindsightQueryableExtensions.AllVersionsMethod;
+                || definition == HindsightQueryableExtensions.AllVersionsMethod
+                || definition == HindsightQueryableExtensions.HistoryMethod;
     }
 }

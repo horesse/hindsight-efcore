@@ -41,4 +41,12 @@ public static class HindsightAnnotationNames
     /// Value: <see langword="true"/>.
     /// </summary>
     internal const string IsHistoryTable = Prefix + "IsHistoryTable";
+
+    /// <summary>
+    /// On a generated history property that is no longer backed by a live entity property: marks the
+    /// column as retained from a previous model version (DESIGN.md D6). The convention re-adds such a
+    /// column, nullable, on every build by reading the previous <c>ModelSnapshot</c>, so the migrations
+    /// differ never drops it. Value: <see langword="true"/>.
+    /// </summary>
+    internal const string Orphaned = Prefix + "Orphaned";
 }

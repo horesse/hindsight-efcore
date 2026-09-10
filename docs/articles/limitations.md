@@ -18,6 +18,10 @@
   roll a value back, copy it from the snapshot onto a fresh instance, or onto one loaded with a
   normal query / `DbSet.Find()`, and save that.
 - **TPH hierarchies** — rejected at model validation.
+- **Removing a primary-key property from a temporal entity** — rejected at model finalization with
+  `InvalidOperationException`. History keeps every other removed column (as a nullable orphan), but
+  the version index and the writer's close-previous-version step are keyed on the primary-key
+  columns, so those cannot be dropped while the entity stays temporal.
 - **Owned collections** inside temporal entities — owned references and complex properties are
   supported for writing history (their columns live in the same table), owned collections are not.
 - **Providers other than Npgsql** — none, by design. Provider-neutral abstractions built "for later"

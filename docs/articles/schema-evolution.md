@@ -11,17 +11,29 @@ table. Existing history rows get `NULL` (or the column default) in the new colum
 ## Removing a column
 
 Remove the property from the entity. The migration removes the column from the main table and
-**keeps it in the history table**, altered to nullable. Old versions still hold data in it; dropping
+**keeps it in the history table**, forced nullable. Old versions still hold data in it; dropping
 the column would destroy history that the whole library exists to preserve.
 
-If you really want it gone, write a migration that drops it explicitly. Hindsight will never do that
-for you.
+How it works: on every model build the history convention reads the previous `ModelSnapshot` and, for
+each history column that no longer has a live property behind it, re-adds it to the model as a
+nullable shadow column tagged `Hindsight:Orphaned`. Because the column never leaves the model, the
+migrations differ has nothing to drop — a generated migration never contains a `DropColumn`,
+`DropTable` or narrowing `AlterColumn` on a history table. A build with no other change scaffolds an
+empty migration.
+
+One case is rejected: removing a property that is part of the entity's **primary key** throws
+`InvalidOperationException`. The history version index and the writer's close-previous-version step
+are keyed on those columns; restore the property, or drop `IsTemporal()` from the entity.
+
+If you really want a history column gone, write a migration that drops it explicitly. Hindsight will
+never do that for you.
 
 ## Renaming a column
 
 EF Core's rename detection applies to the main table. In the history table a rename is treated as
-"remove + add": a new column appears, the old one stays nullable. This is deliberate — a rename in
-history is not distinguishable from a semantic change, and guessing wrong silently corrupts old versions.
+"remove + add": the new column appears, and the old one stays as a nullable orphaned column (same
+mechanism as removing a column). This is deliberate — a rename in history is not distinguishable from
+a semantic change, and guessing wrong silently corrupts old versions.
 
 ## Changing a column type
 

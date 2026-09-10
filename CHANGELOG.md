@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Changed
+
+- `HistoryWriter.Interceptor` now writes all history rows of a `SaveChanges` in a single database
+  round-trip (a batched `DbBatch`, chunked at 512 rows) instead of one `UPDATE` + `INSERT` round-trip
+  per row. Same history rows, same intervals; large batch saves are dramatically faster.
+
 ### Added
 
 - Repository scaffold: solution, packaging, CI, release workflow.

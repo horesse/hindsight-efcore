@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-11
+
 ### Added
 
 - Repository scaffold: solution, packaging, CI, release workflow.

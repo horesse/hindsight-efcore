@@ -8,8 +8,6 @@ No database extensions, no superuser, history lives in your migrations, and the 
 [![NuGet](https://img.shields.io/nuget/v/Hindsight.EntityFrameworkCore.PostgreSQL.svg)](https://www.nuget.org/packages/Hindsight.EntityFrameworkCore.PostgreSQL)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Status: pre-alpha.** The API below is the target, not a promise. Nothing is published to NuGet yet.
-
 ```csharp
 // configure
 modelBuilder.Entity<Policy>().IsTemporal();

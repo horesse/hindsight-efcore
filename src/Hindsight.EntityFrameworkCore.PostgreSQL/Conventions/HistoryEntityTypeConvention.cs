@@ -300,6 +300,14 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         historyBuilder.HasAnnotation(HindsightAnnotationNames.IsHistoryTable, true);
         historyBuilder.HasAnnotation(HindsightAnnotationNames.Orphaned, true);
 
+        // The snapshot entity type already being Orphaned means some earlier migration already made
+        // this transition (and, in Trigger mode, already dropped the stale trigger then); only the
+        // build where the transition happens for the first time needs to signal it.
+        if (snapshotHistory[HindsightAnnotationNames.Orphaned] is not true)
+        {
+            historyBuilder.HasAnnotation(HindsightAnnotationNames.OrphanedTriggerPending, true);
+        }
+
         foreach (var snapshotProperty in snapshotHistory.GetProperties())
         {
             var columnName = snapshotProperty.GetColumnName();

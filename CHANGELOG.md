@@ -102,6 +102,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   and tagged `Hindsight:Orphaned` on the entity type itself, the same way a single removed column was
   already retained. `AsOf()` / `AllVersions()` / `History<T>()` against the now-non-temporal entity
   still throw `InvalidOperationException` as before; only the table's fate changes. No new public API.
+- Removing `IsTemporal()` from an entity under `HistoryWriter.Trigger` now also drops the trigger on the
+  main table. Previously the trigger — which lives on the main table, not the history table — kept
+  firing on every insert/update/delete and kept writing into the now-orphaned history table, even though
+  the entity was no longer temporal in the model. The migration that removes `IsTemporal()` now emits a
+  `DROP FUNCTION ... CASCADE` for it (which also drops the dependent trigger); no data is deleted, only
+  the write path stops. No new public API.
 
 ### Changed
 

@@ -12,8 +12,9 @@ namespace Hindsight.Migrations;
 /// <c>Hindsight:*</c> annotations the history table is built from, appends the
 /// <c>&lt;history_table&gt;_write()</c> function and <c>&lt;history_table&gt;_trg</c> trigger after the
 /// history table is created, re-emits <c>CREATE OR REPLACE FUNCTION</c> whenever a column is added to,
-/// dropped from or renamed on the temporal entity, and drops the function when the history table is
-/// dropped.
+/// dropped from or renamed on the temporal entity, and drops the function — <c>CASCADE</c>, taking the
+/// trigger on the main table with it — when the history table is dropped, or when its entity type stops
+/// being temporal without the table itself being dropped (<see cref="HindsightAnnotationNames.OrphanedTriggerPending"/>).
 /// </summary>
 /// <remarks>
 /// It is a decorator, not a subclass of <c>NpgsqlMigrationsSqlGenerator</c>: that type's only public
@@ -36,12 +37,33 @@ internal sealed class HindsightMigrationsSqlGenerator(
         ArgumentNullException.ThrowIfNull(operations);
 
         var triggers = model is null ? [] : CollectTriggerModels(model);
-        if (triggers.Count == 0)
+        var orphanedDrops = model is null ? [] : CollectOrphanedTriggerDrops(model);
+        if (triggers.Count == 0 && orphanedDrops.Count == 0)
         {
             return inner.Generate(operations, model, options);
         }
 
-        return inner.Generate(Rewrite(operations, triggers), model, options);
+        return inner.Generate(Rewrite(operations, triggers, orphanedDrops), model, options);
+    }
+
+    // A history entity type whose source stopped being temporal this build (DESIGN.md D6): no live
+    // source is left to match it against in CollectTriggerModels, so the differ has nothing to say
+    // about it and the trigger on the main table would otherwise never be dropped.
+    private static List<(string HistoryTable, string? HistorySchema)> CollectOrphanedTriggerDrops(IModel model)
+    {
+        var drops = new List<(string, string?)>();
+
+        foreach (var history in model.GetEntityTypes())
+        {
+            if (history[HindsightAnnotationNames.IsHistoryTable] is true
+                && history[HindsightAnnotationNames.OrphanedTriggerPending] is true
+                && history.GetTableName() is { } tableName)
+            {
+                drops.Add((tableName, history.GetSchema()));
+            }
+        }
+
+        return drops;
     }
 
     private static List<HistoryTriggerModel> CollectTriggerModels(IModel model)
@@ -124,7 +146,8 @@ internal sealed class HindsightMigrationsSqlGenerator(
 
     private List<MigrationOperation> Rewrite(
         IReadOnlyList<MigrationOperation> operations,
-        List<HistoryTriggerModel> triggers)
+        List<HistoryTriggerModel> triggers,
+        List<(string HistoryTable, string? HistorySchema)> orphanedDrops)
     {
         var byHistoryTable = triggers.ToDictionary(trigger => (trigger.HistorySchema, trigger.HistoryTable));
         var byMainTable = triggers.ToDictionary(trigger => (trigger.MainSchema, trigger.MainTable));
@@ -211,6 +234,16 @@ internal sealed class HindsightMigrationsSqlGenerator(
             result.Add(new SqlOperation
             {
                 Sql = HistoryTriggerSqlGenerator.CreateFunction(model, sqlGenerationHelper),
+            });
+        }
+
+        // A history table orphaned this build (its source just stopped being temporal): the differ saw
+        // no operation for it at all, so the drop is appended unconditionally rather than keyed off one.
+        foreach (var (historyTable, historySchema) in orphanedDrops)
+        {
+            result.Add(new SqlOperation
+            {
+                Sql = HistoryTriggerSqlGenerator.DropFunction(historyTable, historySchema, sqlGenerationHelper),
             });
         }
 

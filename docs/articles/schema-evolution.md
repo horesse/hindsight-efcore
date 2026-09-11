@@ -46,6 +46,9 @@ table is simply not reachable from LINQ any more — it is retained for the data
 If you really want the history table gone too, write a migration that drops it explicitly, same as
 for a column.
 
+With the trigger writer, this is also the one case where the migration drops something on its own —
+see [the trigger section](#the-trigger-when-you-use-historywritertrigger) below.
+
 ## Renaming a column
 
 EF Core's rename detection applies to the main table. In the history table a rename is treated as
@@ -72,6 +75,15 @@ adds, drops or renames a column on the temporal entity — or on its history tab
 The trigger definition itself never changes, only the function body, so this is always a
 `CREATE OR REPLACE` — never a `DROP` on the history table (golden rule 3). Dropping the whole history
 table (only if you write that migration by hand) also drops the function, `CASCADE`.
+
+Removing `IsTemporal()` from an entity is the one case where the migration **does** drop the function
+(and, `CASCADE`, the trigger with it) even though the history table itself stays, per the section above.
+The trigger lives on the *main* table, not the history table, so keeping the history table unchanged
+would otherwise leave the trigger firing forever, writing new rows into a table the model no longer
+considers temporal at all. This drop happens exactly once — on the migration where `IsTemporal()` is
+removed — never again on any later migration for the same table.
+
+
 
 ## Making an existing table temporal
 

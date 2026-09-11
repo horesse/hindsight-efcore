@@ -50,8 +50,18 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
   `RelationalTypeMapping` for values); it commits only the transaction it started itself. Cross-hook
   state is keyed by the `DbContext` instance, never a field. Timestamp from `TimeProvider`
   (`CoreOptionsExtension.ApplicationServiceProvider` → `TimeProvider` ?? `TimeProvider.System`), one
-  per `SaveChanges`. Known weakness: two app instances with clock skew can produce overlapping
-  intervals; `ExecuteUpdate`/raw SQL bypass it. This is the default writer.
+  per `SaveChanges`. A `Modified`/`Deleted` row is one statement: a data-modifying CTE closes the
+  open version with `GREATEST(@ts, valid_from + interval '1 microsecond')` and the outer `INSERT`
+  starts the new version at the value the CTE returned (falling back to `@ts` when there was no open
+  version) — the same clamp the trigger applies. Guaranteed as a result: a version chain is always
+  contiguous with strictly positive intervals and exactly one open version, whatever `@ts` a
+  `SaveChanges` captured — including a transaction that captured `@ts` and then waited on the row
+  lock while another one committed a newer version, and a clock that steps backwards between saves.
+  Not guaranteed: that `valid_from` equals the captured `@ts` — when the clamp fires, the new version
+  starts 1µs after the previous one, later than the instant the (behind) clock reported. Two app
+  instances with skewed clocks therefore never overlap, but the version the slower clock writes is
+  dated by the faster one; cross-instance ordering is only as good as the clocks. `ExecuteUpdate`/raw
+  SQL bypass it. This is the default writer.
 - `Trigger` (implemented 2026-09-11): `CREATE OR REPLACE FUNCTION <history_table>_write()` +
   `CREATE OR REPLACE TRIGGER <history_table>_trg AFTER INSERT OR UPDATE OR DELETE` on the main table,
   emitted into the migration from the same annotations by a decorator over the provider's

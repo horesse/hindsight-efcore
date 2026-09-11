@@ -28,6 +28,24 @@ are keyed on those columns; restore the property, or drop `IsTemporal()` from th
 If you really want a history column gone, write a migration that drops it explicitly. Hindsight will
 never do that for you.
 
+## Removing `IsTemporal()` from an entity
+
+The same rule applies one level up. Remove the `IsTemporal()` call — or remove the entity type from
+the model entirely — and the migration drops nothing from the history table's schema: the whole table
+stays, cloned as-is from the previous model snapshot and tagged `Hindsight:Orphaned`, the same way an
+individual removed column is tagged today. A generated migration never contains a `DropTable` for a
+history table just because its source stopped being temporal.
+
+The entity's *main* table is unaffected by this — if the entity is still mapped, just no longer
+temporal, its main table keeps evolving normally; only the history table is pinned. Once orphaned, a
+history table stays in the model on every later build, same as an orphaned column, so it never needs
+re-discovering. Querying it is not part of that: `AsOf()`, `AllVersions()` and `History<T>()` already
+require the entity to be temporal and throw `InvalidOperationException` otherwise, so an orphaned
+table is simply not reachable from LINQ any more — it is retained for the data, not for querying.
+
+If you really want the history table gone too, write a migration that drops it explicitly, same as
+for a column.
+
 ## Renaming a column
 
 EF Core's rename detection applies to the main table. In the history table a rename is treated as

@@ -124,4 +124,6 @@ Hindsight validates the model at build time and fails fast with a specific messa
 - the history table name collides with another table;
 - a required property without a default is excluded;
 - a temporal entity is an owned type;
+- a temporal entity has an owned reference (`OwnsOne`) or a complex property — their columns live on
+  their own type, not the owner's, so history can't mirror them (not supported in v1);
 - a temporal entity takes part in an inheritance hierarchy (not supported in v1).

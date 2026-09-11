@@ -14,8 +14,9 @@ internal enum HistoryOperation : short
 
 /// <summary>
 /// A single tracked temporal change, captured before <c>SaveChanges</c> hits the database and
-/// completed afterwards. One instance becomes one or two SQL statements
-/// (a "close previous version" <c>UPDATE</c> for updates and deletes, then an <c>INSERT</c>).
+/// completed afterwards. One instance becomes one SQL statement: an <c>INSERT</c> for an added
+/// entity; for updates and deletes, a "close previous version" <c>UPDATE</c> in a CTE feeding the
+/// <c>INSERT</c> of the new version.
 /// </summary>
 internal sealed class PendingHistoryRow
 {

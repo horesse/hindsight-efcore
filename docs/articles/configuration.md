@@ -18,7 +18,10 @@ modelBuilder.Entity<Risk>().IsTemporal(t => t
 ```
 
 `Exclude` removes a property from versioning entirely: the column is not copied to the history table,
-and a `SaveChanges` that touched only excluded properties writes no history row.
+and a `SaveChanges` that touched only excluded properties writes no history row. You can exclude some
+primary-key properties of a composite key as long as at least one stays versioned — but excluding all
+of them is rejected (see [Model validation](#model-validation)), since Hindsight would then have no
+column left to identify which history rows belong to which version of the entity.
 
 ## Enabling Hindsight
 
@@ -167,6 +170,10 @@ Hindsight validates the model at build time — the same point `dotnet ef migrat
 — and fails fast with a specific message when:
 
 - a temporal entity has no primary key;
+- every property of a temporal entity's primary key is excluded from history with `Exclude(...)` —
+  Hindsight would have no column left to identify which history rows belong to which version of the
+  entity, so un-exclude at least one primary-key property (`Exclude(...)` is meant for noisy non-key
+  columns, not the key itself);
 - a temporal entity is not mapped to a table;
 - a temporal entity has an owned reference (`OwnsOne`) or a complex property — their columns live on
   their own type, not the owner's, so history can't mirror them (not supported in v1);

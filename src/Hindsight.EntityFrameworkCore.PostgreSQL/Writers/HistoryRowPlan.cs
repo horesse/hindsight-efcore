@@ -116,8 +116,13 @@ internal static class HistoryRowPlan
 
             if (keyColumns.Count == 0)
             {
-                // Every primary-key column is excluded from history: there is no way to address the
-                // previous version. Nothing sensible to write.
+                // HistoryEntityTypeConvention.ValidateTemporalEntityType rejects a temporal entity whose
+                // entire primary key is Exclude()-d at model build time, so that specific cause can no
+                // longer reach a SaveChanges. This stays as a defensive fallback rather than an assert:
+                // keyColumns can in principle also end up empty via a PK property with no column mapping,
+                // or one the history type never mirrored for some other reason, and neither of those is
+                // covered by that check. Skip rather than write a history row with no way to address the
+                // previous version.
                 continue;
             }
 

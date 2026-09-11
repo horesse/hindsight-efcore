@@ -353,6 +353,24 @@ mirrored column set, key columns, period column names) is read from the `IModel`
 those annotations reach it verbatim on both the design-time model and a migration's compiled
 `TargetModel` (D6 established the same for the snapshot model).
 
+**De-temporalizing an entity entirely** (`IsTemporal()` removed, or the entity type removed from the
+model) is a different case from a dropped history table: D6's whole-entity-type orphaning clones the
+history entity type unchanged from the previous snapshot precisely so the differ sees no difference and
+never emits a `DropTableOperation` for it — which also means there is no operation to hang a
+`DROP FUNCTION … CASCADE` on, and the trigger would otherwise keep firing on the main table forever,
+silently writing into a history table the model no longer considers temporal at all. Fixing this at
+`Generate` time would need the *previous* migration's model to compare against, which the generator does
+not have. Instead the convention itself signals the transition, once: `CloneOrphanedHistoryEntityType`
+tags the freshly orphaned history entity type with `Hindsight:OrphanedTriggerPending` only when the
+previous snapshot's entity was not already `Orphaned` — i.e. only on the one migration where the
+transition actually happens. That fact is then baked into that migration's compiled `TargetModel`
+forever, the same mechanism that already makes `Orphaned` itself durable; a later `migrations add` sees
+the snapshot already `Orphaned` and does not set the pending flag again. `Generate` reads
+`OrphanedTriggerPending` independently of the trigger-model matching above (there is no live source left
+to match it against) and appends one `DROP FUNCTION IF EXISTS … CASCADE` — `CASCADE` removes the
+dependent trigger on the main table with it. Not a golden-rule-3 violation: dropping a trigger drops no
+data, only a future write path.
+
 **Why a decorator, not a subclass of `NpgsqlMigrationsSqlGenerator`:** that type's only public
 constructor takes `Npgsql…Infrastructure.Internal.INpgsqlSingletonOptions` — an `.Internal` type,
 which golden rule 1 forbids naming. The decorator resolves `NpgsqlMigrationsSqlGenerator` (a public
@@ -362,8 +380,11 @@ type, and there is no `protected` override to break on a minor release. The extr
 
 Covered by `TriggerDdlTests` (generates the DDL through the real pipeline, applies it to PostgreSQL,
 inspects `pg_proc` / `pg_trigger` / `information_schema`, drives insert/update/delete with raw SQL and
-asserts half-open intervals + tombstone; Verify snapshot of the function + trigger) and
-`TriggerHistoryWriterTests` (every history scenario in both writer modes).
+asserts half-open intervals + tombstone; Verify snapshot of the function + trigger),
+`TriggerHistoryWriterTests` (every history scenario in both writer modes), and
+`OrphanedHistoryTriggerTests` (unit: the pending flag is set on the transition migration only and not on
+any later one; integration: migrates a temporal entity, removes `IsTemporal()`, migrates again for real,
+and asserts a raw SQL insert against the main table no longer writes a history row).
 
 Revisit if: Npgsql stops registering `NpgsqlMigrationsSqlGenerator` as a resolvable concrete service,
 or changes `MigrationsSqlGenerator.Generate`'s contract (the `efcore-preview` canary covers this).

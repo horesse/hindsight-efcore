@@ -187,7 +187,21 @@ internal static class HistoryTriggerSqlGenerator
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(sql);
 
-        var function = sql.DelimitIdentifier(FunctionName(model.HistoryTable), model.HistorySchema);
+        return DropFunction(model.HistoryTable, model.HistorySchema, sql);
+    }
+
+    /// <summary>
+    /// <c>DROP FUNCTION IF EXISTS &lt;history_table&gt;_write() CASCADE</c>, named by the history table
+    /// alone. Emitted when a history entity type becomes <see cref="HindsightAnnotationNames.Orphaned"/>
+    /// (its source stopped being temporal): there is no live source left to build a full
+    /// <see cref="HistoryTriggerModel"/> from, but the function is named after the history table only.
+    /// </summary>
+    public static string DropFunction(string historyTable, string? historySchema, ISqlGenerationHelper sql)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(historyTable);
+        ArgumentNullException.ThrowIfNull(sql);
+
+        var function = sql.DelimitIdentifier(FunctionName(historyTable), historySchema);
         return $"DROP FUNCTION IF EXISTS {function}() CASCADE;";
     }
 }

@@ -52,4 +52,17 @@ public static class HindsightAnnotationNames
     /// just one column, same reasoning, same guarantee. Value: <see langword="true"/>.
     /// </summary>
     internal const string Orphaned = Prefix + "Orphaned";
+
+    /// <summary>
+    /// On a generated history entity type: set for exactly one migration — the one where its source
+    /// entity type stopped being temporal (<see cref="Orphaned"/> just became <see langword="true"/>
+    /// for it, having not been before). In <see cref="HistoryWriter.Trigger"/> mode the physical trigger
+    /// lives on the main table, not the history table, and the model diff between the temporal and
+    /// de-temporalized versions has nothing to say about the now-orphaned history table (that is the
+    /// point of <see cref="Orphaned"/>) — so nothing else would ever tell the migrations SQL generator to
+    /// drop the now-stale trigger. Read once by <c>HindsightMigrationsSqlGenerator</c> to emit that drop,
+    /// then never set again on any later migration for the same history entity type. Value:
+    /// <see langword="true"/>.
+    /// </summary>
+    internal const string OrphanedTriggerPending = Prefix + "OrphanedTriggerPending";
 }

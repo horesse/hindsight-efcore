@@ -123,6 +123,16 @@ No FKs from history to the main table (parent may be deleted). All `not null` / 
 constraints of the original are dropped in history — a unique index on a history table is a reliable
 way to break production on the second edit.
 
+These column names, plus the entity's own configured period-start/period-end names, are reserved: a
+source property whose column collides with one throws `InvalidOperationException` at model-build time
+(`HistoryEntityTypeConvention.ValidateReservedColumnNames`). Without the check, `historyBuilder
+.Property(fixedType, sameName)` in `AddContextColumns`/`AddPeriodColumns`/`AddSurrogateKey` silently
+reconfigures the property `MirrorEntityColumns` already added under that name to the fixed CLR type,
+so the collision is invisible at build time and only shows up later — as a duplicate-column or
+identity-insert error from PostgreSQL in Interceptor mode, or as the entity's own value for that
+column being silently dropped forever with no error at all in Trigger mode, since the migrations
+generator excludes every fixed-name column from the trigger's versioned column list by name.
+
 Intervals are half-open `[valid_from, valid_to)`, everything is `timestamptz` in UTC.
 
 **Row per operation.** `insert` closes nothing and writes one open row (`valid_to = 'infinity'`).

@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Fixed
+
+- Model validation: a temporal entity property whose column collides with a fixed history column
+  (`history_id`, `operation`, `changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) or
+  with its own period-start/period-end column now throws `InvalidOperationException` at model-build
+  time, naming the entity, the property and the column. Previously the collision went undetected at
+  build time and surfaced later as a raw PostgreSQL error on the first `SaveChanges`
+  (`HistoryWriter.Interceptor`) or as the entity's own value for that column being silently dropped
+  forever with no error at all (`HistoryWriter.Trigger`). Equal period-start/period-end column names
+  are rejected the same way.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

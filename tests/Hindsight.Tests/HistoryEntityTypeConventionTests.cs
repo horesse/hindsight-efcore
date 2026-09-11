@@ -108,6 +108,85 @@ public sealed class HistoryEntityTypeConventionTests
         }));
     }
 
+    [Theory]
+    [InlineData("history_id")]
+    [InlineData("operation")]
+    [InlineData("changed_by")]
+    [InlineData("changed_by_name")]
+    [InlineData("correlation_id")]
+    [InlineData("reason")]
+    [InlineData("extra")]
+    public void Property_column_colliding_with_a_fixed_history_column_throws_with_a_clear_message(string column)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b =>
+        {
+            var entity = b.Entity<ReservedColumnEntity>();
+            entity.Property(p => p.Value).HasColumnName(column);
+            entity.IsTemporal();
+        }));
+
+        Assert.Contains($"'{nameof(ReservedColumnEntity)}'", ex.Message);
+        Assert.Contains(nameof(ReservedColumnEntity.Value), ex.Message);
+        Assert.Contains($"'{column}'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("valid_from")]
+    [InlineData("valid_to")]
+    public void Property_column_colliding_with_the_default_period_column_throws_with_a_clear_message(string column)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b =>
+        {
+            var entity = b.Entity<ReservedColumnEntity>();
+            entity.Property(p => p.Value).HasColumnName(column);
+            entity.IsTemporal();
+        }));
+
+        Assert.Contains("period", ex.Message);
+    }
+
+    [Fact]
+    public void Property_column_colliding_with_a_custom_period_column_throws_with_a_clear_message()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b =>
+        {
+            var entity = b.Entity<ReservedColumnEntity>();
+            entity.Property(p => p.Value).HasColumnName("effective_at");
+            entity.IsTemporal(t => t.HasPeriodStart("effective_at"));
+        }));
+
+        Assert.Contains("period", ex.Message);
+    }
+
+    [Fact]
+    public void Equal_period_start_and_end_column_names_throw_with_a_clear_message()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b => b.Entity<Policy>().IsTemporal(t => t
+            .HasPeriodStart("same")
+            .HasPeriodEnd("same"))));
+
+        Assert.Contains("period start and end columns", ex.Message);
+    }
+
+    [Fact]
+    public void Excluded_property_colliding_with_a_fixed_history_column_does_not_throw()
+    {
+        var model = BuildModel(b =>
+        {
+            var entity = b.Entity<ReservedColumnEntity>();
+            entity.Property(p => p.Value).HasColumnName("reason");
+            entity.IsTemporal(t => t.Exclude(p => p.Value));
+        });
+
+        var columns = model.FindEntityType("reserved_column_entities_history")!.GetProperties()
+            .Select(p => p.GetColumnName())
+            .ToList();
+
+        // Only the fixed 'reason' context column exists; the excluded property never reached the
+        // history table (MirrorEntityColumns skips excluded properties), so there was no real collision.
+        Assert.Single(columns, c => c == "reason");
+    }
+
     private static IModel BuildModel(Action<ModelBuilder> configure)
     {
         using var db = new TestContext(configure);
@@ -131,6 +210,13 @@ public sealed class HistoryEntityTypeConventionTests
     private sealed class Keyless
     {
         public string Name { get; set; } = "";
+    }
+
+    [Table("reserved_column_entities")]
+    private sealed class ReservedColumnEntity
+    {
+        public int Id { get; set; }
+        public string Value { get; set; } = "";
     }
 
     private enum PolicyStatus

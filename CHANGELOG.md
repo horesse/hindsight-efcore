@@ -18,6 +18,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Fixed
 
+- Model validation: `IsTemporal()` now throws `InvalidOperationException` at model-build time when
+  every property of a temporal entity's primary key is excluded from history with `Exclude(...)`,
+  naming the entity. Previously this built a model that silently wrote no history row for any insert,
+  update or delete on the entity, forever, with no error — the writer had no key column left to find
+  "the previous version" to close. Excluding some (not all) properties of a composite key is
+  unaffected and still allowed.
 - Model validation: a temporal entity property whose column collides with a fixed history column
   (`history_id`, `operation`, `changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) or
   with its own period-start/period-end column now throws `InvalidOperationException` at model-build

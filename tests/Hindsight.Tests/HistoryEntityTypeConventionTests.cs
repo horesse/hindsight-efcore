@@ -183,6 +183,36 @@ public sealed class HistoryEntityTypeConventionTests
     }
 
     [Fact]
+    public void Temporal_entity_with_its_entire_primary_key_excluded_throws_with_a_clear_message()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => BuildModel(b => b.Entity<Policy>().IsTemporal(t => t.Exclude(p => p.Id))));
+
+        Assert.Contains($"'{nameof(Policy)}'", ex.Message);
+        Assert.Contains("primary key", ex.Message);
+        Assert.Contains("Exclude(...)", ex.Message);
+    }
+
+    [Fact]
+    public void Temporal_entity_with_a_composite_key_partially_excluded_does_not_throw()
+    {
+        var model = BuildModel(b => b.Entity<CompositeKeyPolicy>(e =>
+        {
+            e.HasKey(p => new { p.TenantId, p.Id });
+            e.IsTemporal(t => t.Exclude(p => p.TenantId));
+        }));
+
+        var columns = model.FindEntityType("composite_key_policies_history")!.GetProperties()
+            .Select(p => p.GetColumnName())
+            .ToList();
+
+        // TenantId is excluded but Id still identifies the previous version, so this is allowed
+        // (HistoryRowPlan's keyColumns already handles "some key columns present" correctly).
+        Assert.Contains("Id", columns);
+        Assert.DoesNotContain("TenantId", columns);
+    }
+
+    [Fact]
     public void Equal_period_start_and_end_column_names_throw_with_a_clear_message()
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b => b.Entity<Policy>().IsTemporal(t => t
@@ -224,6 +254,14 @@ public sealed class HistoryEntityTypeConventionTests
         public string Number { get; set; } = "";
         public PolicyStatus Status { get; set; }
         public DateTimeOffset UpdatedAt { get; set; }
+    }
+
+    [Table("composite_key_policies")]
+    private sealed class CompositeKeyPolicy
+    {
+        public int TenantId { get; set; }
+        public int Id { get; set; }
+        public string Number { get; set; } = "";
     }
 
     private sealed class MotorPolicy : Policy

@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Every history table now also gets a `gist (tstzrange(valid_from, valid_to))` period-range index
+  (`ix_<history_table>_period`), created by the migration alongside the table in both
+  `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `DESIGN.md` and
+  `.claude/rules/sql-and-migrations.md` had documented this index since before any code existed; it
+  had never actually been built. Without it, an `AsOf` / `History<T>` query that does not also filter
+  on the entity's primary key forced a sequential scan of the whole history table for the
+  period-overlap predicate. No new PostgreSQL extension is required — range types have a native GiST
+  operator class in PostgreSQL core. No new public API.
+
 ### Fixed
 
 - `IsTemporal()` now throws `NotSupportedException` for an entity with an owned reference (`OwnsOne`)

@@ -128,7 +128,7 @@ bypass history; this is documented, not worked around. An analyzer diagnostic ma
 | `reason` | `text null` | |
 | `extra` | `jsonb null` | |
 
-Indexes: `(pk columns, valid_from desc)` and GiST on `tstzrange(valid_from, valid_to)`.
+Indexes: `(pk columns, valid_from desc)` and GiST on `tstzrange(valid_from, valid_to)` (D14).
 No FKs from history to the main table (parent may be deleted). All `not null` / unique / check
 constraints of the original are dropped in history — a unique index on a history table is a reliable
 way to break production on the second edit.
@@ -419,6 +419,47 @@ and asserts a raw SQL insert against the main table no longer writes a history r
 
 Revisit if: Npgsql stops registering `NpgsqlMigrationsSqlGenerator` as a resolvable concrete service,
 or changes `MigrationsSqlGenerator.Generate`'s contract (the `efcore-preview` canary covers this).
+
+## D14. Period-range GiST index — implemented 2026-09-11
+
+D5 has promised a GiST index on the period range since before any code existed; it was never actually
+built (found while auditing D5 against the convention that builds history tables — no regression, a
+doc that got ahead of the code). `AsOf(t)` and `History<T>`'s range-overlap predicate
+(`valid_from <= t AND valid_to > t`) is served by the D5 `(pk columns, valid_from desc)` btree index
+only when the query also filters on the leading key columns; a query that does not (or a bare
+`AllVersions()`/`History<T>()` scan filtered on a non-key column) forces a sequential scan of the whole
+history table. A real range index closes that gap.
+
+**Shape:** one column, `gist (tstzrange(valid_from, valid_to))` — no primary-key columns included.
+Range types have a native GiST opclass in PostgreSQL core, so this needs no extension; a composite
+GiST index that also covered the key columns (an exclusion-constraint-style index) would need
+`btree_gist` for the scalar key part, which would contradict README's "no database extensions, no
+superuser" non-goal for a gain the version index — most `AsOf` calls do filter on the key — already
+covers. A single-column range index also needs no change for a composite primary key, since it never
+references key columns at all: there is exactly one index shape regardless of how the entity is keyed.
+
+**Emission:** same mechanism as the Trigger DDL (D13) — `HindsightMigrationsSqlGenerator` reads
+`Hindsight:IsHistoryTable` / `Hindsight:PeriodStart` / `Hindsight:PeriodEnd` off the `IModel` passed to
+`Generate` and injects a `CREATE INDEX` `SqlOperation` right after the history table's
+`CreateTableOperation`. Unlike the trigger function, the index is never re-emitted: a history table's
+period columns and their types never change after creation, so there is nothing to keep in sync.
+`HindsightMigrationsSqlGenerator` was previously registered as `IMigrationsSqlGenerator` only in
+`HistoryWriter.Trigger` mode (nothing else needed it); the index has nothing to do with which writer is
+configured, so the decorator is now registered in both modes, and takes the configured `HistoryWriter`
+so it knows whether to also emit the trigger DDL.
+
+**Surviving D6 orphaning:** whole-entity-type orphaning (D6) never drops or recreates a history table —
+that is the entire point of `CloneOrphanedHistoryEntityType` — so an index created back when the entity
+was still temporal is never touched by a later de-temporalizing migration; nothing had to be added to
+the orphaning path itself. (This differs from the Trigger function, which does need an explicit
+`DROP FUNCTION … CASCADE` on that transition — D13 — because the function lives outside the table and
+the differ has no operation to hang it on. A physical index has no such problem: it is dropped only if
+its table is, and D6 guarantees the table never is.)
+
+Covered by `HistoryPeriodRangeIndexTests` (single-column-key and composite-key entities, both writer
+modes — `pg_index`/`pg_am` confirm the `gist` access method and `pg_indexes` confirms the definition)
+and `HistoryTableRetentionOnDetemporalizeTests` (the index survives the same de-temporalize migration
+D6 already covers for the table itself).
 
 ## Open questions (resolve in the spike, then move up)
 

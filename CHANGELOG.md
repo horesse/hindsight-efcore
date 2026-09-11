@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Fixed
+
+- `IsTemporal()` now throws `NotSupportedException` for an entity with an owned reference (`OwnsOne`)
+  or a complex property, instead of silently building a history table that is missing their columns —
+  a `SaveChanges` that changed only one of them could previously write zero history rows.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

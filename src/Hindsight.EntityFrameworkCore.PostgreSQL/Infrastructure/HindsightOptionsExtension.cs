@@ -16,11 +16,13 @@ namespace Hindsight.Infrastructure;
 /// <summary>
 /// The <see cref="IDbContextOptionsExtension"/> that <c>UseHindsight()</c> adds. It always registers
 /// <see cref="HindsightConventionSetPlugin"/> so the history entity types are built into the model, the
-/// <see cref="HistorySnapshotGuardInterceptor"/> and the <see cref="HindsightQueryExpressionInterceptor"/>.
-/// For <see cref="HistoryWriter.Interceptor"/> it also registers the <see cref="HistoryWriterInterceptor"/>
-/// that writes history rows on <c>SaveChanges</c>; for <see cref="HistoryWriter.Trigger"/> it instead
-/// registers the <see cref="HindsightMigrationsSqlGenerator"/> that generates the history trigger and the
-/// <see cref="HistoryTriggerContextInterceptor"/> that pushes the change context into the transaction.
+/// <see cref="HistorySnapshotGuardInterceptor"/>, the <see cref="HindsightQueryExpressionInterceptor"/>,
+/// and the <see cref="HindsightMigrationsSqlGenerator"/> that emits every history table's period-range
+/// index (DESIGN.md D5). For <see cref="HistoryWriter.Interceptor"/> it also registers the
+/// <see cref="HistoryWriterInterceptor"/> that writes history rows on <c>SaveChanges</c>; for
+/// <see cref="HistoryWriter.Trigger"/> it instead registers the <see cref="HistoryTriggerContextInterceptor"/>
+/// that pushes the change context into the transaction, and <see cref="HindsightMigrationsSqlGenerator"/>
+/// additionally generates the history trigger DDL.
 /// </summary>
 internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
 {
@@ -72,19 +74,23 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
             // transaction, and the migration needs to grow the trigger DDL (DESIGN.md D3).
             services.TryAddEnumerable(
                 ServiceDescriptor.Scoped<IInterceptor, HistoryTriggerContextInterceptor>());
-
-            // Decorate the provider's generator: resolve NpgsqlMigrationsSqlGenerator (public type) as a
-            // concrete service — DI fills its constructor, including the internal option — and wrap it.
-            services.AddScoped<NpgsqlMigrationsSqlGenerator>();
-            services.AddScoped<IMigrationsSqlGenerator>(serviceProvider => new HindsightMigrationsSqlGenerator(
-                serviceProvider.GetRequiredService<NpgsqlMigrationsSqlGenerator>(),
-                serviceProvider.GetRequiredService<ISqlGenerationHelper>()));
         }
         else
         {
             services.TryAddEnumerable(
                 ServiceDescriptor.Scoped<IInterceptor, HistoryWriterInterceptor>());
         }
+
+        // Decorate the provider's generator: resolve NpgsqlMigrationsSqlGenerator (public type) as a
+        // concrete service — DI fills its constructor, including the internal option — and wrap it.
+        // Registered in both writer modes: the history table's period-range index (DESIGN.md D5) has
+        // nothing to do with which writer is configured, only the trigger DDL is Trigger-mode-only, and
+        // HindsightMigrationsSqlGenerator itself decides which of the two to emit from HistoryWriter.
+        services.AddScoped<NpgsqlMigrationsSqlGenerator>();
+        services.AddScoped<IMigrationsSqlGenerator>(serviceProvider => new HindsightMigrationsSqlGenerator(
+            serviceProvider.GetRequiredService<NpgsqlMigrationsSqlGenerator>(),
+            serviceProvider.GetRequiredService<ISqlGenerationHelper>(),
+            HistoryWriter));
     }
 
     public void Validate(IDbContextOptions options)

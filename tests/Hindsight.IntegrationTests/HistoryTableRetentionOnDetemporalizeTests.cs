@@ -62,6 +62,51 @@ public sealed class HistoryTableRetentionOnDetemporalizeTests(PostgresFixture po
         Assert.Equal(1, await HistoryRowCountAsync(cs));
     }
 
+    [Fact]
+    public async Task Removing_IsTemporal_keeps_the_period_range_index()
+    {
+        var cs = await postgres.CreateDatabaseAsync(nameof(Removing_IsTemporal_keeps_the_period_range_index), Ct);
+
+        // v1: Policy is temporal; create the schema for real, so the index is created for real too.
+        await using var v1 = new DetemporalizeContext(cs, isTemporal: true);
+        await v1.Database.EnsureCreatedAsync(Ct);
+        var v1Model = v1.GetService<IDesignTimeModel>().Model;
+
+        Assert.True(await PeriodRangeIndexExistsAsync(cs));
+
+        // v2: IsTemporal() removed entirely (DESIGN.md D6) — the history table, and the index on it,
+        // must survive: D6 never drops or recreates the table, so there is nothing to re-emit either.
+        await using var v2 = new DetemporalizeContext(cs, isTemporal: false, snapshotModel: v1Model);
+        var v2Model = v2.GetService<IDesignTimeModel>().Model;
+
+        var operations = v2.GetService<IMigrationsModelDiffer>().GetDifferences(
+            v1Model.GetRelationalModel(), v2Model.GetRelationalModel());
+        var commands = v2.GetService<IMigrationsSqlGenerator>().Generate(operations, v2Model);
+        foreach (var command in commands)
+        {
+            await v2.Database.ExecuteSqlRawAsync(command.CommandText, Ct);
+        }
+
+        Assert.True(await PeriodRangeIndexExistsAsync(cs));
+    }
+
+    private static async Task<bool> PeriodRangeIndexExistsAsync(string connectionString)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(Ct);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            select am.amname
+            from pg_index i
+            join pg_class c on c.oid = i.indexrelid
+            join pg_am am on am.oid = c.relam
+            where i.indrelid = 'policies_history'::regclass and c.relname = 'ix_policies_history_period'
+            """;
+        var accessMethod = await command.ExecuteScalarAsync(Ct);
+        return (string?)accessMethod == "gist";
+    }
+
     private static async Task<bool> TableExistsAsync(string connectionString, string table)
     {
         await using var connection = new NpgsqlConnection(connectionString);

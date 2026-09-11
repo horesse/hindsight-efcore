@@ -3,6 +3,26 @@
 History tables are ordinary entity types in the EF Core model, so `dotnet ef migrations add` sees
 them and generates the DDL. The rules below decide *what* it generates.
 
+## Indexes on the history table
+
+The migration that first creates a history table also creates two indexes on it, regardless of
+which [history writer](history-writers.md) you use:
+
+- `ix_<history_table>_version` — a btree index on `(<primary key columns>, valid_from desc)`, an
+  ordinary EF Core model index. It serves `AsOf` and `History<T>` calls that also filter on the
+  entity's key.
+- `ix_<history_table>_period` — `gist (tstzrange(valid_from, valid_to))`. `AsOf`'s and `History<T>`'s
+  period-overlap predicate (`valid_from <= t AND valid_to > t`) is a range-containment test; without
+  this index, a query that cannot also use the leading columns of the version index above forces a
+  sequential scan of the whole history table. It is a single column — it does not reference the
+  primary key at all, so it applies unchanged whether the entity has a single-column or a composite
+  key — and needs no PostgreSQL extension: range types have a native GiST operator class in core.
+
+Both indexes are created once, alongside the table, and never re-emitted or altered by a later
+migration: neither the key columns nor the period columns' types can change once a table has been
+created. Removing `IsTemporal()` from an entity (below) does not drop them either, because it does not
+drop the history table.
+
 ## Adding a column
 
 Add the property to the entity. The migration adds the column to both the main table and the history

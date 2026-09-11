@@ -53,3 +53,14 @@
   open its own transaction (the caller has none), with or without `EnableRetryOnFailure()`: Npgsql
   refuses to start a second transaction on a connection already enlisted in one. Open the transaction
   through `context.Database.BeginTransaction()` instead.
+- **A failed history write under `HistoryWriter.Interceptor` leaves a deleted entity `Detached`.** If
+  the history write for a `Deleted` entity fails — invalid `ChangeContext.Extra` JSON, a transient
+  connection failure — the whole transaction (data change included) rolls back correctly, but the
+  entity instance stays `Detached` in the caller's `ChangeTracker`: EF Core's own `SaveChanges`
+  pipeline already detached it (`ChangeTracker.AcceptAllChanges()`) before the interceptor's
+  `SavedChanges` event even fires, and by then Hindsight no longer has a tracked `EntityEntry` to
+  restore. A caught exception followed by a plain `SaveChanges()` retry on the same instance does
+  nothing for this entity; re-query it (or `Remove` a freshly loaded instance) instead. `Added` and
+  `Modified` entities do not have this problem — their `EntityEntry` is still reachable, so Hindsight
+  restores the original `EntityState` before rethrowing and a plain retry works. See
+  [History writers → What happens if the history write fails](history-writers.md#what-happens-if-the-history-write-fails).

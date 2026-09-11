@@ -48,6 +48,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   otherwise open its own transaction (no ambient transaction from the caller). Wrap the call in
   `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction to use retry
   with Hindsight. See [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).
+- `HistoryWriter.Interceptor`: when the history write itself fails after a successful data write (for
+  example, invalid `ChangeContext.Extra` JSON, or a transient connection failure between the data write
+  and the history write), the transaction still rolls back both writes together as before, but `Added`
+  and `Modified` entities are now restored to their pre-save `EntityState` before the exception is
+  rethrown. Previously EF Core's own `SaveChanges` pipeline had already called
+  `ChangeTracker.AcceptAllChanges()` before Hindsight's `SavedChanges` interceptor ran, so a caller
+  catching the exception and retrying `SaveChanges()` on the same context found nothing left to save
+  and silently did nothing, even though the database held none of the failed change. A `Deleted`
+  entity's `EntityEntry` is already detached by `AcceptAllChanges()` by that point and cannot be
+  restored the same way; this remains a documented caveat — see
+  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
+  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
 
 ## [1.0.0] - 2026-09-11
 

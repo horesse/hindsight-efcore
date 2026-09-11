@@ -28,6 +28,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   value — the same clamp `HistoryWriter.Trigger` already applied — so `AsOf` at any instant returns
   at most one row per entity. With a monotonic clock the written timestamps are unchanged. The close
   and the insert are now one statement per row (a data-modifying CTE); batching is unaffected.
+- `SaveChanges` on a context configured with `UseNpgsql(cs, o => o.EnableRetryOnFailure())` now throws
+  a clear `InvalidOperationException` naming the conflict and the fix, instead of a confusing
+  EF Core- or Npgsql-authored exception that never mentions Hindsight, whenever a history writer would
+  otherwise open its own transaction (no ambient transaction from the caller). Wrap the call in
+  `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction to use retry
+  with Hindsight. See [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).
 
 ## [1.0.0] - 2026-09-11
 

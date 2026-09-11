@@ -44,3 +44,12 @@
   (`UseHindsight(h => h.WithChangeContext<T>())`). Hindsight ships no default provider.
 - History tables grow without bound. Partitioning by `valid_from` and retention are v2; the schema is
   chosen so they can be added without migration of existing data.
+- **`UseNpgsql(cs, o => o.EnableRetryOnFailure())`** — a retrying execution strategy — is incompatible
+  with a writer opening its own transaction: `SaveChanges` throws `InvalidOperationException` naming
+  the conflict unless you wrap the call yourself in
+  `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction open before
+  `SaveChanges` runs. See [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
+- **Ambient `System.Transactions.TransactionScope`** is not supported by either writer when it needs to
+  open its own transaction (the caller has none), with or without `EnableRetryOnFailure()`: Npgsql
+  refuses to start a second transaction on a connection already enlisted in one. Open the transaction
+  through `context.Database.BeginTransaction()` instead.

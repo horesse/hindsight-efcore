@@ -50,6 +50,51 @@ application service provider (`services.AddSingleton<TimeProvider>(new FakeTimeP
 resolved from there and falls back to `TimeProvider.System`. The trigger writer uses `now()` and
 ignores `TimeProvider`; assert on interval shape instead, or use distinct transactions.
 
+## EnableRetryOnFailure and transactions
+
+Both writers open a transaction themselves when `SaveChanges` is called with none already open, so the
+data change and the history row(s) commit together (see [History writers](history-writers.md)). That
+transaction is opened from inside `SaveChanges` itself, which is a problem for
+`UseNpgsql(cs, o => o.EnableRetryOnFailure())`: its retrying execution strategy can re-run the whole
+`SaveChanges` call after a transient failure, and a transaction opened inside that call would not
+survive the retry. EF Core (or Npgsql, for an ambient `TransactionScope`) refuses to let that happen —
+so, with retry enabled and no transaction of your own, `SaveChanges` throws
+`InvalidOperationException` naming the conflict and the fix, from whichever writer would have opened
+the transaction:
+
+```csharp
+services.AddDbContext<AppDbContext>(o => o
+    .UseNpgsql(connectionString, npgsql => npgsql.EnableRetryOnFailure())
+    .UseHindsight());
+
+// throws InvalidOperationException: this context is configured with both a retrying execution
+// strategy and Hindsight's history writer, which needs its own transaction.
+await db.SaveChangesAsync();
+```
+
+Fix it the way EF Core's own docs recommend for combining retry with a transaction: wrap the call in
+`CreateExecutionStrategy().ExecuteAsync(...)` and open the transaction yourself inside it. Because your
+transaction is then open before `SavingChanges` fires, Hindsight sees `CurrentTransaction` already set
+and uses it instead of opening its own — no conflict, and the whole unit, data change and history rows
+included, is safely retried together:
+
+```csharp
+var strategy = db.Database.CreateExecutionStrategy();
+await strategy.ExecuteAsync(async () =>
+{
+    await using var tx = await db.Database.BeginTransactionAsync();
+    // ... modify tracked entities ...
+    await db.SaveChangesAsync();
+    await tx.CommitAsync();
+});
+```
+
+If you never open your own transaction around a `SaveChanges` that writes a temporal entity, do not
+combine `EnableRetryOnFailure()` with Hindsight. An ambient `System.Transactions.TransactionScope` is
+not a fix either — it is not supported here at all, with or without retry enabled, because Hindsight
+opening its own transaction inside one is exactly the case Npgsql and EF Core refuse (see
+[Limitations → Known trade-offs](limitations.md#known-trade-offs)).
+
 ## Context configuration
 
 Every history row has five context columns — `changed_by`, `changed_by_name`, `correlation_id`,

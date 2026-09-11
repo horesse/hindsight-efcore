@@ -37,7 +37,9 @@ migration creates (or drops) the trigger function; it never touches your data or
    [excluded](configuration.md) properties, it is dropped here and produces no history row. It takes
    one timestamp from the registered `TimeProvider` for the whole `SaveChanges`. If you have not
    opened a transaction, it opens one now, so the data change and the history rows commit or roll back
-   together.
+   together — unless the context is configured with a retrying execution strategy
+   (`EnableRetryOnFailure()`), in which case opening a transaction here would not survive a retry, and
+   this throws instead; see [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
 2. **The save runs** as usual, inside that transaction.
 3. **After the save** (`SavedChanges`): store-generated keys are now known, so for `Added` and
    `Modified` rows the interceptor re-reads the current values. Then, per entity:
@@ -144,7 +146,10 @@ SELECT set_config('hindsight.changed_by', @changedBy, true),
 and the trigger reads each back with `current_setting('hindsight.changed_by', true)` (the `true` makes
 a missing value return `NULL` rather than error). If the caller has no transaction open, Hindsight
 opens one for that `SaveChanges` — EF Core runs a single-statement save without a transaction by
-default, and a transaction-local setting needs one — and commits it with the data. `db.WithReason("…")`
+default, and a transaction-local setting needs one — and commits it with the data (the same
+`EnableRetryOnFailure()` caveat as the interceptor writer applies here too, and only when there is a
+`ChangeContext` to push — see [Configuration](configuration.md#enableretryonfailure-and-transactions)).
+`db.WithReason("…")`
 works the same as in interceptor mode. This costs one extra round-trip per `SaveChanges` — about
 3 ms on a 100-row update in the [benchmarks](#benchmarks) below; for the interceptor the same provider
 call and the five extra columns fold into the batch round-trip it already sends, with no measurable

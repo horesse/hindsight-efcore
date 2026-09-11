@@ -1,9 +1,5 @@
 # Getting started
 
-> [!WARNING]
-> Hindsight is pre-alpha. This guide describes the target v1 experience; parts of it are not implemented yet.
-> Track progress in the [changelog](https://github.com/horesse/hindsight-efcore/blob/master/CHANGELOG.md).
-
 ## Requirements
 
 - .NET 10

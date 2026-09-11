@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Fixed
+
+- `HistoryWriter.Interceptor` no longer produces overlapping or negative history intervals when two
+  transactions update the same row concurrently, or when the clock steps backwards between two
+  `SaveChanges`. The previous version is now closed with
+  `GREATEST(@ts, valid_from + interval '1 microsecond')` and the new version starts at exactly that
+  value — the same clamp `HistoryWriter.Trigger` already applied — so `AsOf` at any instant returns
+  at most one row per entity. With a monotonic clock the written timestamps are unchanged. The close
+  and the insert are now one statement per row (a data-modifying CTE); batching is unaffected.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

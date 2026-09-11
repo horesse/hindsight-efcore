@@ -105,6 +105,25 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
         Assert.Equal(string.Empty, exists);
     }
 
+    [Fact]
+    public async Task Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cs = await postgres.CreateDatabaseAsync(
+            nameof(Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table),
+            ct);
+
+        var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>().UseNpgsql(cs).Options;
+        await using var db = new PolicyWithOwnedAddressContext(options);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => db.Database.EnsureCreatedAsync(ct));
+
+        await using var conn = new NpgsqlConnection(cs);
+        await conn.OpenAsync(ct);
+        var exists = await ScalarAsync(conn, "select to_regclass('policies_history')::text");
+        Assert.Equal(string.Empty, exists);
+    }
+
     private async Task<(string ConnectionString, PolicyContext Context)> CreateSchemaAsync(string name)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -196,6 +215,33 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
             policy.Property(p => p.Metadata).HasColumnName("metadata").HasColumnType("jsonb");
             policy.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             policy.IsTemporal(t => t.Exclude(p => p.UpdatedAt));
+        }
+    }
+
+    private sealed class PolicyWithOwnedAddress
+    {
+        public int Id { get; set; }
+        public string Number { get; set; } = "";
+        public OwnedAddress BillingAddress { get; set; } = new();
+    }
+
+    private sealed class OwnedAddress
+    {
+        public string Street { get; set; } = "";
+        public string City { get; set; } = "";
+    }
+
+    private sealed class PolicyWithOwnedAddressContext(DbContextOptions<PolicyWithOwnedAddressContext> options)
+        : DbContext(options)
+    {
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder) => optionsBuilder.UseHindsight();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var policy = modelBuilder.Entity<PolicyWithOwnedAddress>();
+            policy.ToTable("policies");
+            policy.OwnsOne(p => p.BillingAddress);
+            policy.IsTemporal();
         }
     }
 }

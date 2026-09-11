@@ -5,8 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- Every history table now also gets a `gist (tstzrange(valid_from, valid_to))` period-range index
+  (`ix_<history_table>_period`), created by the migration alongside the table in both
+  `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `DESIGN.md` and
+  `.claude/rules/sql-and-migrations.md` had documented this index since before any code existed; it
+  had never actually been built. Without it, an `AsOf` / `History<T>` query that does not also filter
+  on the entity's primary key forced a sequential scan of the whole history table for the
+  period-overlap predicate. No new PostgreSQL extension is required — range types have a native GiST
+  operator class in PostgreSQL core. No new public API.
+
 ### Fixed
 
+- `IsTemporal()` now throws `NotSupportedException` for an entity with an owned reference (`OwnsOne`)
+  or a complex property, instead of silently building a history table that is missing their columns —
+  a `SaveChanges` that changed only one of them could previously write zero history rows.
+- `HistoryWriter.Interceptor` no longer produces overlapping or negative history intervals when two
+  transactions update the same row concurrently, or when the clock steps backwards between two
+  `SaveChanges`. The previous version is now closed with
+  `GREATEST(@ts, valid_from + interval '1 microsecond')` and the new version starts at exactly that
+  value — the same clamp `HistoryWriter.Trigger` already applied — so `AsOf` at any instant returns
+  at most one row per entity. With a monotonic clock the written timestamps are unchanged. The close
+  and the insert are now one statement per row (a data-modifying CTE); batching is unaffected.
 - `SaveChanges` on a context configured with `UseNpgsql(cs, o => o.EnableRetryOnFailure())` now throws
   a clear `InvalidOperationException` naming the conflict and the fix, instead of a confusing
   EF Core- or Npgsql-authored exception that never mentions Hindsight, whenever a history writer would

@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Fixed
+
+- `SaveChanges` on a context configured with `UseNpgsql(cs, o => o.EnableRetryOnFailure())` now throws
+  a clear `InvalidOperationException` naming the conflict and the fix, instead of a confusing
+  EF Core- or Npgsql-authored exception that never mentions Hindsight, whenever a history writer would
+  otherwise open its own transaction (no ambient transaction from the caller). Wrap the call in
+  `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction to use retry
+  with Hindsight. See [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

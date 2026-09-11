@@ -12,8 +12,10 @@ namespace Hindsight.Writers;
 /// The <see cref="HistoryWriter.Interceptor"/> implementation. On <c>SaveChanges</c> it snapshots the
 /// tracked temporal entities; once the data change has hit the database — so store-generated keys are
 /// known — it writes the history rows on the same connection and in the same transaction, opening one
-/// if the caller did not. One timestamp per <c>SaveChanges</c>, taken from the registered
-/// <see cref="TimeProvider"/>. Intervals are half-open <c>[valid_from, valid_to)</c> (DESIGN.md D3, D5).
+/// if the caller did not (via <see cref="HistoryWriterTransaction"/>, which also rejects a configured
+/// retrying execution strategy in that case — such a transaction would not survive a retry). One
+/// timestamp per <c>SaveChanges</c>, taken from the registered <see cref="TimeProvider"/>. Intervals
+/// are half-open <c>[valid_from, valid_to)</c> (DESIGN.md D3, D5).
 /// </summary>
 internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
 {
@@ -128,9 +130,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        IDbContextTransaction? ownedTransaction = context.Database.CurrentTransaction is null
-            ? context.Database.BeginTransaction()
-            : null;
+        var ownedTransaction = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
 
         _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
     }
@@ -143,9 +143,8 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        IDbContextTransaction? ownedTransaction = context.Database.CurrentTransaction is null
-            ? await context.Database.BeginTransactionAsync(cancellationToken)
-            : null;
+        var ownedTransaction = await HistoryWriterTransaction.BeginIfNeededAsync(
+            context, HistoryWriter.Interceptor, cancellationToken);
 
         _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
     }

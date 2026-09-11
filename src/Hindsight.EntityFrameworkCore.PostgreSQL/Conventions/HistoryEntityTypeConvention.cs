@@ -87,6 +87,20 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
                 + "history requires a table mapping; call ToTable(...) or remove IsTemporal().");
         }
 
+        // Owned references and complex properties live on their own IConventionEntityType / complex type,
+        // so GetProperties() below never sees their columns: mirroring would silently drop them from
+        // history, and a SaveChanges that only touches one of them would silently write no history row at
+        // all (CLAUDE.md rule 2). Reject at model build time instead — matches the read-side guard in
+        // HistoryQueryRootRewriter (DESIGN.md D12).
+        if (entityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned())
+            || entityType.GetComplexProperties().Any())
+        {
+            throw new NotSupportedException(
+                $"Entity '{entityType.DisplayName()}' is temporal but has owned or complex members, which "
+                + "Hindsight cannot mirror into a history table (their columns live on their own type, not "
+                + "on this entity's). Remove IsTemporal(), or remove the owned/complex members.");
+        }
+
         ValidateReservedColumnNames(entityType);
     }
 

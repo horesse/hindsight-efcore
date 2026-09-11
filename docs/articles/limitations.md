@@ -8,9 +8,13 @@
   with a second `AsOf()` query.
 - **`AsOf()` not first in the query** — `db.Set<T>().Where(...).AsOf(t)` throws; `AsOf` must be the
   first operator, on the `DbSet` itself.
-- **`AsOf()` / `AllVersions()` / `History<T>()` on owned / complex / inherited entities** — throws
-  `NotSupportedException`: those column sets are not reconstructable from the history table in v1. Use
-  `FromSql` against the history table.
+- **Owned references / complex properties on a temporal entity** — rejected outright: `IsTemporal()`
+  throws `NotSupportedException` at model finalization, before any history table is built. Their
+  columns live on their own `IEntityType` / complex type, not the owner's, so mirroring them into
+  history — or reconstructing them on `AsOf()` / `AllVersions()` / `History<T>()` — is not
+  reconstructable from the history table in v1. Owned collections were never supported either (a
+  collection has no columns on the owner's table at all). Make the entity standalone, remove the
+  owned/complex members, or use `FromSql` against the main table.
 - **Restoring** an entity to a previous version — history is read-only (DESIGN.md D7). An `AsOf()` /
   `AllVersions()` / `History<T>()` snapshot is detached and no-tracking, and re-attaching one
   (`Update` / `Attach` / `Add` / `Remove`) and calling `SaveChanges` throws
@@ -22,8 +26,6 @@
   `InvalidOperationException`. History keeps every other removed column (as a nullable orphan), but
   the version index and the writer's close-previous-version step are keyed on the primary-key
   columns, so those cannot be dropped while the entity stays temporal.
-- **Owned collections** inside temporal entities — owned references and complex properties are
-  supported for writing history (their columns live in the same table), owned collections are not.
 - **Providers other than Npgsql** — none, by design. Provider-neutral abstractions built "for later"
   are always wrong later.
 
@@ -42,3 +44,12 @@
   (`UseHindsight(h => h.WithChangeContext<T>())`). Hindsight ships no default provider.
 - History tables grow without bound. Partitioning by `valid_from` and retention are v2; the schema is
   chosen so they can be added without migration of existing data.
+- **`UseNpgsql(cs, o => o.EnableRetryOnFailure())`** — a retrying execution strategy — is incompatible
+  with a writer opening its own transaction: `SaveChanges` throws `InvalidOperationException` naming
+  the conflict unless you wrap the call yourself in
+  `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction open before
+  `SaveChanges` runs. See [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
+- **Ambient `System.Transactions.TransactionScope`** is not supported by either writer when it needs to
+  open its own transaction (the caller has none), with or without `EnableRetryOnFailure()`: Npgsql
+  refuses to start a second transaction on a connection already enlisted in one. Open the transaction
+  through `context.Database.BeginTransaction()` instead.

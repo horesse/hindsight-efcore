@@ -108,6 +108,30 @@ public sealed class HistoryEntityTypeConventionTests
         }));
     }
 
+    [Fact]
+    public void Temporal_entity_with_an_owned_reference_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithOwnedAddress>(e =>
+        {
+            e.OwnsOne(p => p.BillingAddress);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("owned or complex members", ex.Message);
+    }
+
+    [Fact]
+    public void Temporal_entity_with_a_complex_property_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithComplexMoney>(e =>
+        {
+            e.ComplexProperty(p => p.Premium);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("owned or complex members", ex.Message);
+    }
+
     [Theory]
     [InlineData("history_id")]
     [InlineData("operation")]
@@ -224,6 +248,28 @@ public sealed class HistoryEntityTypeConventionTests
         Draft,
         Active,
     }
+
+    private sealed class PolicyWithOwnedAddress
+    {
+        public int Id { get; set; }
+        public string Number { get; set; } = "";
+        public Address BillingAddress { get; set; } = new();
+    }
+
+    private sealed class Address
+    {
+        public string Street { get; set; } = "";
+        public string City { get; set; } = "";
+    }
+
+    private sealed class PolicyWithComplexMoney
+    {
+        public int Id { get; set; }
+        public string Number { get; set; } = "";
+        public Money Premium { get; set; }
+    }
+
+    private readonly record struct Money(decimal Amount, string Currency);
 
     private sealed class TestContext(Action<ModelBuilder> configure) : DbContext
     {

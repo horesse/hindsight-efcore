@@ -243,6 +243,103 @@ public sealed class InterceptorHistoryWriterTests(PostgresFixture postgres)
         Assert.True(untouched.IsOpen); // the other chain was left alone
     }
 
+    [Fact]
+    public async Task Concurrent_update_with_an_earlier_timestamp_stays_contiguous()
+    {
+        var cs = await postgres.CreateDatabaseAsync(nameof(Concurrent_update_with_an_earlier_timestamp_stays_contiguous), Ct);
+        await using (var seed = NewContext(cs, HistoryWriter.Interceptor, new MutableTimeProvider(_t0)))
+        {
+            await seed.Database.EnsureCreatedAsync(Ct);
+            seed.Policies.Add(NewPolicy());
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        // Two overlapping transactions on the same row. B captures its timestamp (08:30) BEFORE A's
+        // (09:00) but A takes the row lock first, so B's history write runs only after A committed
+        // its version [09:00, ∞). Closing that version at 08:30 would make it negative and leave two
+        // versions matching AsOf(08:45); the clamp closes it at 09:00 + 1µs instead and starts B's
+        // version there. The same shape covers a clock that runs behind on one of two app instances.
+        var tA = _t0.AddHours(1);
+        var tB = _t0.AddMinutes(30);
+        await using var a = NewContext(cs, HistoryWriter.Interceptor, new MutableTimeProvider(tA));
+        await using var b = NewContext(cs, HistoryWriter.Interceptor, new MutableTimeProvider(tB));
+
+        await using var txA = await a.Database.BeginTransactionAsync(Ct);
+        (await a.Policies.SingleAsync(Ct)).Premium = 200m;
+        await a.SaveChangesAsync(Ct);
+
+        var bWork = Task.Run(
+            async () =>
+            {
+                await using var txB = await b.Database.BeginTransactionAsync(Ct);
+                (await b.Policies.SingleAsync(Ct)).Premium = 300m;
+                await b.SaveChangesAsync(Ct);
+                await txB.CommitAsync(Ct);
+            },
+            Ct);
+
+        await WaitUntilOneSessionIsBlockedOnALockAsync(cs);
+        await txA.CommitAsync(Ct);
+        await bWork;
+
+        var versions = await ReadHistoryAsync(cs, policyId: 1);
+
+        Assert.Equal([(short)1, (short)2, (short)2], versions.Select(v => v.Operation));
+        Assert.Equal(_t0.UtcDateTime, versions[0].ValidFrom);
+        Assert.Equal(tA.UtcDateTime, versions[0].ValidTo);                 // A closed the seed version at its own @ts
+        Assert.Equal(tA.UtcDateTime, versions[1].ValidFrom);
+        Assert.Equal(tA.UtcDateTime.AddTicks(10), versions[1].ValidTo);    // B clamped to valid_from + 1µs, not 08:30
+        Assert.Equal(versions[1].ValidTo, versions[2].ValidFrom);          // B's version starts where A's ended
+        Assert.Equal(300m, versions[2].Premium);
+        AssertWellFormedChain(versions);
+
+        await using var reader = NewContext(cs, HistoryWriter.Interceptor, new MutableTimeProvider(_t0));
+        Assert.Equal(100m, (await reader.Policies.AsOf(tB).SingleAsync(Ct)).Premium);              // between seed and A
+        Assert.Equal(200m, (await reader.Policies.AsOf(tA).SingleAsync(Ct)).Premium);              // A's 1µs-long version
+        Assert.Equal(300m, (await reader.Policies.AsOf(tA.AddTicks(10)).SingleAsync(Ct)).Premium); // B's open version
+        Assert.Equal(300m, (await reader.Policies.AsOf(tA.AddDays(1)).SingleAsync(Ct)).Premium);
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    public async Task Clock_stepping_backwards_between_saves_keeps_the_chain_contiguous(HistoryWriter writer)
+    {
+        var time = new MutableTimeProvider(_t0);
+        await using var h = await CreateAsync(
+            writer, nameof(Clock_stepping_backwards_between_saves_keeps_the_chain_contiguous), time);
+
+        var policy = NewPolicy();
+        h.Db.Policies.Add(policy);
+        await h.Db.SaveChangesAsync(Ct);
+
+        // The wall clock steps back (NTP correction, VM restore) between two saves: each later save
+        // reports a timestamp older than the open version's valid_from. Contiguity wins over the
+        // reported instant — the version is closed 1µs after it started and the next one begins there.
+        time.Advance(TimeSpan.FromHours(-1));
+        policy.Status = PolicyStatus.Active;
+        await h.Db.SaveChangesAsync(Ct);
+
+        time.Advance(TimeSpan.FromHours(-1));
+        h.Db.Policies.Remove(policy);
+        await h.Db.SaveChangesAsync(Ct);
+
+        var versions = await ReadHistoryAsync(h.ConnectionString, policyId: 1);
+
+        Assert.Equal([(short)1, (short)2, (short)3], versions.Select(v => v.Operation));
+        Assert.Equal(_t0.UtcDateTime, versions[0].ValidFrom);
+        Assert.Equal(_t0.UtcDateTime.AddTicks(10), versions[0].ValidTo);      // not 07:00
+        Assert.Equal(versions[0].ValidTo, versions[1].ValidFrom);
+        Assert.Equal(_t0.UtcDateTime.AddTicks(20), versions[1].ValidTo);      // not 06:00
+        Assert.Equal(versions[1].ValidTo, versions[2].ValidFrom);
+        Assert.Equal(versions[2].ValidFrom, versions[2].ValidTo);             // tombstone stays an empty interval
+        Assert.DoesNotContain(versions, v => v.IsOpen);
+        AssertWellFormedChain(versions);
+
+        Assert.Equal("Draft", (await h.Db.Policies.AsOf(_t0).SingleAsync(Ct)).Status.ToString());
+        Assert.Equal("Active", (await h.Db.Policies.AsOf(_t0.AddTicks(10)).SingleAsync(Ct)).Status.ToString());
+        Assert.False(await h.Db.Policies.AsOf(_t0.AddTicks(20)).AnyAsync(Ct));  // deleted
+    }
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static Policy NewPolicy(string number = "ACME-1")
@@ -251,15 +348,66 @@ public sealed class InterceptorHistoryWriterTests(PostgresFixture postgres)
     private async Task<Harness> CreateAsync(HistoryWriter writer, string dbName, MutableTimeProvider time)
     {
         var cs = await postgres.CreateDatabaseAsync(dbName, Ct);
+        var db = NewContext(cs, writer, time);
+        await db.Database.EnsureCreatedAsync(Ct);
+        return new Harness(cs, db);
+    }
+
+    private static PolicyContext NewContext(string connectionString, HistoryWriter writer, MutableTimeProvider time)
+    {
         var options = new DbContextOptionsBuilder<PolicyContext>()
-            .UseNpgsql(cs)
+            .UseNpgsql(connectionString)
             .UseApplicationServiceProvider(new SingleServiceProvider(typeof(TimeProvider), time))
             .UseHindsight(hb => hb.UseHistoryWriter(writer))
             .Options;
 
-        var db = new PolicyContext(options);
-        await db.Database.EnsureCreatedAsync(Ct);
-        return new Harness(cs, db);
+        return new PolicyContext(options);
+    }
+
+    // Every consecutive pair is contiguous, every real version is strictly positive (a tombstone is
+    // the one legitimately empty interval), and at most one version is open.
+    private static void AssertWellFormedChain(IReadOnlyList<HistoryRow> versions)
+    {
+        for (var i = 1; i < versions.Count; i++)
+        {
+            Assert.Equal(versions[i - 1].ValidTo, versions[i].ValidFrom);
+        }
+
+        foreach (var version in versions)
+        {
+            if (version.Operation == (short)3)
+            {
+                Assert.Equal(version.ValidFrom, version.ValidTo);
+            }
+            else
+            {
+                Assert.True(version.ValidTo > version.ValidFrom, $"[{version.ValidFrom:O}, {version.ValidTo:O}) is not positive");
+            }
+        }
+
+        Assert.True(versions.Count(v => v.IsOpen) <= 1);
+    }
+
+    // Synchronisation point for the concurrency test: returns once the second session is parked on
+    // the first one's row lock, so committing the first is guaranteed to unblock it rather than race
+    // it. Polls pg_stat_activity rather than sleeping a fixed amount (.claude/rules/tests.md).
+    private static async Task WaitUntilOneSessionIsBlockedOnALockAsync(string connectionString)
+    {
+        await using var conn = new NpgsqlConnection(connectionString);
+        await conn.OpenAsync(Ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            select count(*) from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+            """;
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(Ct, timeout.Token);
+        while ((long)(await cmd.ExecuteScalarAsync(linked.Token))! == 0)
+        {
+            await Task.Delay(20, linked.Token);
+        }
     }
 
     private static async Task<List<HistoryRow>> ReadHistoryAsync(string connectionString, int policyId)

@@ -19,13 +19,17 @@ namespace Hindsight.Writers;
 /// trigger can read it back with <c>current_setting('hindsight.&lt;key&gt;', true)</c>.
 /// </summary>
 /// <remarks>
-/// It also opens a transaction when the caller has none, exactly as the Interceptor writer does: EF
-/// Core's default <c>AutoTransactionBehavior.WhenNeeded</c> runs a single-statement <c>SaveChanges</c>
-/// without a transaction, and <c>set_config(..., true)</c> outside a transaction has no effect. The
-/// transaction it opens is committed in <c>SavedChanges</c> and rolled back in
-/// <c>SaveChangesFailed</c>, so the data change, the trigger's history rows and the context all commit
-/// together. Bulk operations (<c>ExecuteUpdate</c>/<c>ExecuteDelete</c>) do not pass through here: the
-/// trigger still records their history, with <see langword="null"/> context columns (DESIGN.md D4).
+/// It also opens a transaction when the caller has none, exactly as the Interceptor writer does (via
+/// <see cref="HistoryWriterTransaction"/>): EF Core's default <c>AutoTransactionBehavior.WhenNeeded</c>
+/// runs a single-statement <c>SaveChanges</c> without a transaction, and <c>set_config(..., true)</c>
+/// outside a transaction has no effect. The transaction it opens is committed in <c>SavedChanges</c>
+/// and rolled back in <c>SaveChangesFailed</c>, so the data change, the trigger's history rows and the
+/// context all commit together. Bulk operations (<c>ExecuteUpdate</c>/<c>ExecuteDelete</c>) do not pass
+/// through here: the trigger still records their history, with <see langword="null"/> context columns
+/// (DESIGN.md D4). A configured retrying execution strategy makes opening that transaction unsafe —
+/// see <see cref="HistoryWriterTransaction"/> — but only once there is actually a context to push
+/// (<see cref="Capture"/> returns <see langword="null"/>, and no transaction is touched, when neither a
+/// change context provider nor <see cref="ChangeReasonScope"/> is in use).
 /// </remarks>
 internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 {
@@ -123,9 +127,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var owned = context.Database.CurrentTransaction is null
-            ? context.Database.BeginTransaction()
-            : null;
+        var owned = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Trigger);
 
         try
         {
@@ -158,9 +160,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var owned = context.Database.CurrentTransaction is null
-            ? await context.Database.BeginTransactionAsync(cancellationToken)
-            : null;
+        var owned = await HistoryWriterTransaction.BeginIfNeededAsync(context, HistoryWriter.Trigger, cancellationToken);
 
         try
         {

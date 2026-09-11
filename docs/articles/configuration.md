@@ -163,12 +163,20 @@ using (db.WithReason("Backdated correction after audit"))
 
 ## Model validation
 
-Hindsight validates the model at build time and fails fast with a specific message when:
+Hindsight validates the model at build time — the same point `dotnet ef migrations add` builds it at
+— and fails fast with a specific message when:
 
 - a temporal entity has no primary key;
-- the history table name collides with another table;
-- a required property without a default is excluded;
-- a temporal entity is an owned type;
+- a temporal entity is not mapped to a table;
 - a temporal entity has an owned reference (`OwnsOne`) or a complex property — their columns live on
   their own type, not the owner's, so history can't mirror them (not supported in v1);
-- a temporal entity takes part in an inheritance hierarchy (not supported in v1).
+- a temporal entity takes part in an inheritance hierarchy (not supported in v1);
+- a source property's column collides with one of the fixed history columns (`history_id`,
+  `operation`, `changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) or with the
+  entity's own period-start/period-end column — rename the property's column, exclude it, or (for a
+  period-column collision) pick different period column names;
+- the period-start and period-end column names are the same.
+
+A history table name that collides with another table in the model is also rejected, but by EF
+Core's own model validation rather than a Hindsight-specific message, since the history entity type
+is an ordinary property-bag entity type as far as EF Core is concerned.

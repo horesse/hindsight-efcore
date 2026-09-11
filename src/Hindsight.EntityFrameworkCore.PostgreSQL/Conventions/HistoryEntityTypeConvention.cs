@@ -100,6 +100,87 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
                 + "Hindsight cannot mirror into a history table (their columns live on their own type, not "
                 + "on this entity's). Remove IsTemporal(), or remove the owned/complex members.");
         }
+
+        ValidateReservedColumnNames(entityType);
+    }
+
+    // Every column Hindsight fixes on the history table (DESIGN.md D5): the surrogate key, the change
+    // context, and the period columns, whichever names those were configured with. A source property
+    // mapped to one of these silently loses the collision instead of failing: MirrorEntityColumns adds
+    // the property first, and AddContextColumns/AddPeriodColumns/AddSurrogateKey's own
+    // historyBuilder.Property(fixedType, sameName) calls quietly reconfigure that same property to the
+    // fixed CLR type and facets rather than erroring, so the entity's original data type is lost with no
+    // signal. Downstream this shows up differently per writer: HistoryWriter.Interceptor concatenates the
+    // versioned and fixed context columns into one INSERT list with no de-duplication, so it either fails
+    // an InvalidCastException converting the entity's value into the fixed column's shape, or the SQL
+    // reaches PostgreSQL with the same column named twice ("column ... specified more than once"),
+    // depending on whether the coerced type happens to match the entity's own. HistoryWriter.Trigger's
+    // migrations generator excludes every fixed-name column from the trigger's versioned column set by
+    // name, so the entity's real value for that column is never captured at all — no error anywhere,
+    // dotnet ef migrations add and every SaveChanges succeed, and the column silently always holds the
+    // change context's value (or NULL) instead. Reject the collision at model-build time instead of
+    // hitting either failure mode at migration or SaveChanges time.
+    private static void ValidateReservedColumnNames(IConventionEntityType entityType)
+    {
+        var periodStart = (string?)entityType[HindsightAnnotationNames.PeriodStartColumnName]
+            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName;
+        var periodEnd = (string?)entityType[HindsightAnnotationNames.PeriodEndColumnName]
+            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName;
+
+        if (string.Equals(periodStart, periodEnd, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Entity '{entityType.DisplayName()}' is temporal but its period start and end columns are "
+                + $"both named '{periodStart}'. Give them distinct names with HasPeriodStart(...) and HasPeriodEnd(...).");
+        }
+
+        var reservedColumns = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [HindsightHistoryColumns.HistoryId] = "the history table's surrogate key",
+            [HindsightHistoryColumns.Operation] = "the change-kind column",
+            [HindsightHistoryColumns.ChangedBy] = "the change context",
+            [HindsightHistoryColumns.ChangedByName] = "the change context",
+            [HindsightHistoryColumns.CorrelationId] = "the change context",
+            [HindsightHistoryColumns.Reason] = "the change context",
+            [HindsightHistoryColumns.Extra] = "the change context",
+        };
+
+        var periodColumns = new HashSet<string>(StringComparer.Ordinal) { periodStart, periodEnd };
+
+        foreach (var property in entityType.GetProperties())
+        {
+            if (property[HindsightAnnotationNames.IsExcluded] is true)
+            {
+                // Never mirrored onto the history table (MirrorEntityColumns skips it too), so there is
+                // no actual column to collide with.
+                continue;
+            }
+
+            var columnName = property.GetColumnName();
+            if (columnName is null)
+            {
+                continue;
+            }
+
+            if (reservedColumns.TryGetValue(columnName, out var reservedFor))
+            {
+                throw new InvalidOperationException(
+                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{property.Name}' is "
+                    + $"mapped to column '{columnName}', which Hindsight reserves on the history table for "
+                    + $"{reservedFor}. Map the property to a different column with HasColumnName(...), or "
+                    + "exclude it from history with Exclude(...) if it does not need to be versioned.");
+            }
+
+            if (periodColumns.Contains(columnName))
+            {
+                throw new InvalidOperationException(
+                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{property.Name}' is "
+                    + $"mapped to column '{columnName}', which is configured as the history table's period "
+                    + "column. Map the property to a different column with HasColumnName(...), pick a "
+                    + "different period column name with HasPeriodStart(...)/HasPeriodEnd(...), or exclude "
+                    + "the property from history with Exclude(...) if it does not need to be versioned.");
+            }
+        }
     }
 
     private static IConventionEntityTypeBuilder? BuildHistoryEntityType(

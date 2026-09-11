@@ -209,9 +209,28 @@ came from history — re-attaching one with `Update` / `Attach` / `Add` / `Remov
 
 It's an interval join on overlapping periods. A silently wrong answer is worse than no feature.
 
-## D9. TPH hierarchies are rejected in v1
+## D9. TPH hierarchies, owned references and complex properties are rejected in v1
 
 One clear exception at model validation. Support is an issue, not a stretch goal.
+
+**Owned references and complex properties — resolved 2026-09-11.** `HistoryEntityTypeConvention.MirrorEntityColumns`
+iterates `source.GetProperties()` on the temporal entity's own `IConventionEntityType`; a property that
+lives on an owned entity type (`OwnsOne`) or a complex type belongs to *that* type's own
+`IConventionEntityType` / `IConventionComplexType` and is never returned by the owner's
+`GetProperties()`, even though (for table splitting, the only mapping Hindsight or EF supports without
+extra configuration) its column is physically present on the same table. Mirroring would therefore
+silently drop those columns from history, and `HistoryRowPlan.HasVersionedModification` — which also
+only looks at the top-level entry's properties — would silently write **zero** history rows for a
+`SaveChanges` that touched only an owned/complex member (exactly the golden-rule-2 outcome this package
+exists to prevent). `ValidateTemporalEntityType` therefore rejects it before any of that can happen:
+`entityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned()) || entityType.GetComplexProperties().Any()`
+throws `NotSupportedException` at `IsTemporal()` / model-finalization time, mirroring the identical guard
+`HistoryQueryRootRewriter` already had on the read side (below) — now unreachable for any entity that
+went through the convention, but left in place since it is the same defense-in-depth pattern as the TPH
+check just above it, and a direct annotation-level bypass of the convention is the only way to reach it.
+Owned collections were already out of scope (no columns on the owner's table at all) and stay so.
+Revisit if a later version reconstructs owned/complex members on the read side (D12) *and* mirrors their
+columns on write — both sides would need to move together, so partial support is not planned.
 
 ## D10. Naming
 
@@ -316,9 +335,11 @@ Two things root replacement does not give for free, both handled in the rewrite 
 Further rules the hook enforces (all three markers): the marker must be the first operator on the
 query (else `InvalidOperationException` — move it before `Where`/`OrderBy`/…; not reachable for
 `History<T>()`, which starts from the `DbContext`); on a non-temporal entity it
-throws `InvalidOperationException` naming the entity; on an inheritance hierarchy (D9) or an
-entity with owned / complex members it throws `NotSupportedException` (those column sets are not
-reconstructable from the history table — use `FromSql`).
+throws `InvalidOperationException` naming the entity; on an inheritance hierarchy or an entity with
+owned / complex members it throws `NotSupportedException` (those column sets are not reconstructable
+from the history table — use `FromSql`) — both are now unreachable in practice, since `IsTemporal()`
+itself already rejects either shape at model finalization (D9), but the guard stays as the same
+defense-in-depth this file uses elsewhere.
 
 **Blocking a re-attached snapshot from being saved (D7 sentence 2) — done, 2026-09-10.** The result
 is detached and no-tracking, but nothing in EF stops `Update` / `Attach` / `Add` / `Remove` +

@@ -8,9 +8,13 @@
   with a second `AsOf()` query.
 - **`AsOf()` not first in the query** — `db.Set<T>().Where(...).AsOf(t)` throws; `AsOf` must be the
   first operator, on the `DbSet` itself.
-- **`AsOf()` / `AllVersions()` / `History<T>()` on owned / complex / inherited entities** — throws
-  `NotSupportedException`: those column sets are not reconstructable from the history table in v1. Use
-  `FromSql` against the history table.
+- **Owned references / complex properties on a temporal entity** — rejected outright: `IsTemporal()`
+  throws `NotSupportedException` at model finalization, before any history table is built. Their
+  columns live on their own `IEntityType` / complex type, not the owner's, so mirroring them into
+  history — or reconstructing them on `AsOf()` / `AllVersions()` / `History<T>()` — is not
+  reconstructable from the history table in v1. Owned collections were never supported either (a
+  collection has no columns on the owner's table at all). Make the entity standalone, remove the
+  owned/complex members, or use `FromSql` against the main table.
 - **Restoring** an entity to a previous version — history is read-only (DESIGN.md D7). An `AsOf()` /
   `AllVersions()` / `History<T>()` snapshot is detached and no-tracking, and re-attaching one
   (`Update` / `Attach` / `Add` / `Remove`) and calling `SaveChanges` throws
@@ -22,8 +26,6 @@
   `InvalidOperationException`. History keeps every other removed column (as a nullable orphan), but
   the version index and the writer's close-previous-version step are keyed on the primary-key
   columns, so those cannot be dropped while the entity stays temporal.
-- **Owned collections** inside temporal entities — owned references and complex properties are
-  supported for writing history (their columns live in the same table), owned collections are not.
 - **Providers other than Npgsql** — none, by design. Provider-neutral abstractions built "for later"
   are always wrong later.
 

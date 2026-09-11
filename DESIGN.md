@@ -160,6 +160,33 @@ a delete is meant to be read (D12).
   generated DDL to real PostgreSQL and inspects `information_schema`).
 - Column renamed → new column in history, old one stays as a nullable orphan (same mechanism). No
   rename magic.
+- `IsTemporal()` removed from an entity entirely (or the entity type removed from the model
+  altogether) → **the whole history table is kept, tagged orphaned — extended to whole entity types,
+  2026-09-11.** The mechanism above only orphans a *column* whose source property disappeared from an
+  entity that is still in `temporalEntityTypes`; it never ran for an entity that left that set
+  altogether, because there was no history entity type left to attach an orphaned column to. So
+  `HistoryEntityTypeConvention` also tracks which history entity type names it actually rebuilt this
+  pass and, after that loop, walks the previous `ModelSnapshot` for every entity type tagged
+  `Hindsight:IsHistoryTable` that isn't among them. Each one is re-materialized into the current
+  model as a `SharedTypeEntity` cloned from the snapshot's own history entity type — every column with
+  its store type / converter / length / precision / scale / default value / value-generation strategy,
+  the primary key, every index — and the entity type itself is tagged `Hindsight:Orphaned` (the same
+  annotation D6 already uses for a column, now also valid at entity-type scope). There is no live
+  source entity left to mirror from at this point; the snapshot's history entity type, already fully
+  built by this same convention when it was current, is the only source of truth. The differ then sees
+  the table unchanged and emits nothing — no `CreateTable`, no `DropTable`, no `AlterColumn` — the same
+  "the column/table never leaves the model" trick D6 already relies on for columns. Detection doesn't
+  care *why* the entity type left `temporalEntityTypes` (`IsTemporal()` removed vs. the CLR type/DbSet
+  removed vs. `Ignore()`d), only that it's no longer being rebuilt — one mechanism covers all three.
+  Querying is unaffected: `AsOf()` / `AllVersions()` / `History<T>()` already throw
+  `InvalidOperationException` on a non-temporal entity (the `Hindsight:HistoryEntityType` annotation
+  that names its history table is only set while an entity is temporal), so an orphaned whole table is
+  simply invisible to querying, same as before this fix — nothing new to guard there. Once orphaned, a
+  history entity type is pinned forever the same way an orphaned column is: it reappears in every
+  subsequent snapshot, so every later build re-clones it. Only a hand-written migration removes it,
+  same carve-out as the rest of golden rule 3. Covered by
+  `HistoryTableRetentionOnDetemporalizeTests` (Testcontainers: applies the generated DDL to real
+  PostgreSQL and confirms the table and its data survive).
 - Existing non-empty table made temporal → v1.1 (`INSERT ... SELECT` seeding the initial version).
 
 ## D7. Historical queries are always no-tracking

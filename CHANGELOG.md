@@ -95,6 +95,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   `DropColumn` / `DropTable` / narrowing `AlterColumn` on a history table. Removing a **primary-key**
   property from a temporal entity throws `InvalidOperationException` — the history version index and
   the writer's close-previous-version step need the key columns. No new public API.
+- Removing `IsTemporal()` from an entity entirely — not just one property — now keeps its history
+  table too (DESIGN.md D6, golden rule 3). `dotnet ef migrations add` never emits a `DropTable` for a
+  history table just because its source stopped being temporal (or was removed from the model): the
+  whole history entity type is cloned back from the previous `ModelSnapshot` — columns, key, indexes —
+  and tagged `Hindsight:Orphaned` on the entity type itself, the same way a single removed column was
+  already retained. `AsOf()` / `AllVersions()` / `History<T>()` against the now-non-temporal entity
+  still throw `InvalidOperationException` as before; only the table's fate changes. No new public API.
 
 ### Changed
 

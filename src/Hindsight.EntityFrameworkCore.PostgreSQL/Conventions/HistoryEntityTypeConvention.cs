@@ -18,6 +18,10 @@ namespace Hindsight.Conventions;
 /// property has since been removed, as a nullable shadow property tagged
 /// <see cref="HindsightAnnotationNames.Orphaned"/>. The column therefore never disappears from the
 /// model, so the differ never emits a <c>DropColumn</c> on a history table (DESIGN.md D6, golden rule 3).
+/// The same snapshot pass also catches an entity that stopped being temporal altogether (<c>IsTemporal()</c>
+/// removed, or the entity type removed from the model entirely): its whole history entity type is cloned
+/// back from the snapshot verbatim — columns, key, indexes — and tagged <see cref="HindsightAnnotationNames.Orphaned"/>
+/// on the entity type itself, so the differ never emits a <c>DropTable</c> either.
 /// </remarks>
 internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrationsAssembly) : IModelFinalizingConvention
 {
@@ -42,15 +46,20 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             .Where(entityType => entityType[HindsightAnnotationNames.IsTemporal] is true)
             .ToList();
 
+        var liveHistoryEntityTypeNames = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var entityType in temporalEntityTypes)
         {
             ValidateTemporalEntityType(entityType);
             var historyBuilder = BuildHistoryEntityType(modelBuilder, entityType);
             if (historyBuilder is not null)
             {
+                liveHistoryEntityTypeNames.Add(historyBuilder.Metadata.Name);
                 RestoreOrphanedColumns(historyBuilder, entityType);
             }
         }
+
+        RestoreOrphanedHistoryEntityTypes(modelBuilder, liveHistoryEntityTypeNames);
     }
 
     private static void ValidateTemporalEntityType(IConventionEntityType entityType)
@@ -134,39 +143,47 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             // Facet mirroring (DESIGN.md D2): a property-bag column declared by CLR type alone loses
             // the source's store type; copy the explicit facets so enum-as-string, jsonb, numeric(p,s)
             // and custom converters land on the same column type.
-            if (property.GetColumnType() is { } storeType)
-            {
-                historyProperty.HasColumnType(storeType);
-            }
+            CopyStoreFacets(historyProperty, property);
+        }
+    }
 
-            if (property.GetValueConverter() is { } converter)
-            {
-                historyProperty.HasConversion(converter);
-            }
-            else if (property.GetProviderClrType() is { } providerClrType)
-            {
-                historyProperty.HasConversion(providerClrType);
-            }
+    // Shared by MirrorEntityColumns, RestoreOrphanedColumns and CloneOrphanedHistoryEntityType: a
+    // property-bag column declared by CLR type alone loses every store facet of its source, so each
+    // caller copies them across explicitly.
+    private static void CopyStoreFacets(IConventionPropertyBuilder target, IReadOnlyProperty source)
+    {
+        if (source.GetColumnType() is { } storeType)
+        {
+            target.HasColumnType(storeType);
+        }
 
-            if (property.GetMaxLength() is { } maxLength)
-            {
-                historyProperty.HasMaxLength(maxLength);
-            }
+        if (source.GetValueConverter() is { } converter)
+        {
+            target.HasConversion(converter);
+        }
+        else if (source.GetProviderClrType() is { } providerClrType)
+        {
+            target.HasConversion(providerClrType);
+        }
 
-            if (property.IsUnicode() is { } unicode)
-            {
-                historyProperty.IsUnicode(unicode);
-            }
+        if (source.GetMaxLength() is { } maxLength)
+        {
+            target.HasMaxLength(maxLength);
+        }
 
-            if (property.GetPrecision() is { } precision)
-            {
-                historyProperty.HasPrecision(precision);
-            }
+        if (source.IsUnicode() is { } unicode)
+        {
+            target.IsUnicode(unicode);
+        }
 
-            if (property.GetScale() is { } scale)
-            {
-                historyProperty.HasScale(scale);
-            }
+        if (source.GetPrecision() is { } precision)
+        {
+            target.HasPrecision(precision);
+        }
+
+        if (source.GetScale() is { } scale)
+        {
+            target.HasScale(scale);
         }
     }
 
@@ -222,42 +239,128 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
             restored.HasColumnName(columnName);
             restored.IsRequired(false);
-
-            if (snapshotProperty.GetColumnType() is { } storeType)
-            {
-                restored.HasColumnType(storeType);
-            }
-
-            if (snapshotProperty.GetValueConverter() is { } converter)
-            {
-                restored.HasConversion(converter);
-            }
-            else if (snapshotProperty.GetProviderClrType() is { } providerClrType)
-            {
-                restored.HasConversion(providerClrType);
-            }
-
-            if (snapshotProperty.GetMaxLength() is { } maxLength)
-            {
-                restored.HasMaxLength(maxLength);
-            }
-
-            if (snapshotProperty.IsUnicode() is { } unicode)
-            {
-                restored.IsUnicode(unicode);
-            }
-
-            if (snapshotProperty.GetPrecision() is { } precision)
-            {
-                restored.HasPrecision(precision);
-            }
-
-            if (snapshotProperty.GetScale() is { } scale)
-            {
-                restored.HasScale(scale);
-            }
-
+            CopyStoreFacets(restored, snapshotProperty);
             restored.HasAnnotation(HindsightAnnotationNames.Orphaned, true);
+        }
+    }
+
+    // DESIGN.md D6. A history entity type present in the previous model snapshot whose source stopped
+    // being temporal — IsTemporal() removed, or the source entity type removed from the model entirely
+    // — is not in liveHistoryEntityTypeNames, because it was never rebuilt above. Cloning it back from
+    // the snapshot (columns, key, indexes, tagged Orphaned on the entity type itself) keeps it in the
+    // model unchanged, so the differ sees no difference and never emits a DropTable (golden rule 3).
+    // Same re-entrancy guard as RestoreOrphanedColumns: building the snapshot model re-runs this
+    // convention, and the snapshot's own history entity types must not be re-cloned into themselves.
+    private void RestoreOrphanedHistoryEntityTypes(
+        IConventionModelBuilder modelBuilder, HashSet<string> liveHistoryEntityTypeNames)
+    {
+        if (_resolvingSnapshotModel)
+        {
+            return;
+        }
+
+        var snapshotModel = ResolveSnapshotModel();
+        if (snapshotModel is null)
+        {
+            return;
+        }
+
+        foreach (var snapshotHistory in snapshotModel.GetEntityTypes())
+        {
+            if (snapshotHistory[HindsightAnnotationNames.IsHistoryTable] is true
+                && !liveHistoryEntityTypeNames.Contains(snapshotHistory.Name))
+            {
+                CloneOrphanedHistoryEntityType(modelBuilder, snapshotHistory);
+            }
+        }
+    }
+
+    // Recreates a history entity type verbatim from its previous-snapshot shape: every column with its
+    // store facets, nullability, default and value-generation strategy; the primary key; every index.
+    // There is no live source entity left to mirror from (that is the whole point), so the snapshot's
+    // own history entity type — already fully built by this convention when it was current — is the
+    // only source of truth from here on.
+    private static void CloneOrphanedHistoryEntityType(IConventionModelBuilder modelBuilder, IEntityType snapshotHistory)
+    {
+        var tableName = snapshotHistory.GetTableName();
+        if (tableName is null)
+        {
+            return;
+        }
+
+        var historyBuilder = modelBuilder.SharedTypeEntity(snapshotHistory.Name, typeof(Dictionary<string, object>));
+        if (historyBuilder is null)
+        {
+            // Already present in the model — can't happen alongside "not in liveHistoryEntityTypeNames"
+            // unless something else claimed the name; leave it alone rather than fight over it.
+            return;
+        }
+
+        historyBuilder.ToTable(tableName, snapshotHistory.GetSchema());
+        historyBuilder.HasAnnotation(HindsightAnnotationNames.IsHistoryTable, true);
+        historyBuilder.HasAnnotation(HindsightAnnotationNames.Orphaned, true);
+
+        foreach (var snapshotProperty in snapshotHistory.GetProperties())
+        {
+            var columnName = snapshotProperty.GetColumnName();
+            if (columnName is null)
+            {
+                continue;
+            }
+
+            var restored = historyBuilder.Property(snapshotProperty.ClrType, columnName);
+            if (restored is null)
+            {
+                continue;
+            }
+
+            restored.HasColumnName(columnName);
+            restored.IsRequired(!snapshotProperty.IsNullable);
+            restored.ValueGenerated(snapshotProperty.ValueGenerated);
+            CopyStoreFacets(restored, snapshotProperty);
+
+            if (snapshotProperty.GetDefaultValueSql() is { } defaultSql)
+            {
+                restored.HasDefaultValueSql(defaultSql);
+            }
+
+            // Npgsql's stable public annotation key (AddSurrogateKey sets it the same way); only
+            // history_id carries it, but copy whatever is actually there rather than assume.
+            if (snapshotProperty.FindAnnotation("Npgsql:ValueGenerationStrategy") is { Value: not null } strategy)
+            {
+                restored.HasAnnotation("Npgsql:ValueGenerationStrategy", strategy.Value);
+            }
+        }
+
+        var snapshotKey = snapshotHistory.FindPrimaryKey();
+        if (snapshotKey is not null)
+        {
+            var keyProperties = snapshotKey.Properties
+                .Select(p => p.GetColumnName() is { } column ? historyBuilder.Metadata.FindProperty(column) : null)
+                .ToList();
+            if (keyProperties.Count > 0 && keyProperties.All(p => p is not null))
+            {
+                historyBuilder.PrimaryKey(keyProperties!);
+            }
+        }
+
+        foreach (var snapshotIndex in snapshotHistory.GetIndexes())
+        {
+            var indexColumns = snapshotIndex.Properties
+                .Select(p => p.GetColumnName())
+                .Where(column => column is not null)
+                .Select(column => column!)
+                .ToList();
+            if (indexColumns.Count != snapshotIndex.Properties.Count || snapshotIndex.Name is not { } indexName)
+            {
+                continue;
+            }
+
+            var restoredIndex = historyBuilder.HasIndex(indexColumns, indexName);
+            if (restoredIndex is not null && snapshotIndex.IsDescending is { Count: > 0 } descending)
+            {
+                restoredIndex.IsDescending(descending);
+            }
         }
     }
 

@@ -34,6 +34,13 @@ services.AddDbContext<AppDbContext>(o => o
 `UseHindsight()` turns on the convention that builds a history table into the model for every
 `IsTemporal()` entity, and installs the history writer that fills those tables on `SaveChanges`.
 
+Hindsight only supports the Npgsql/PostgreSQL provider (see
+[Limitations and non-goals](limitations.md#not-in-v1)). It checks for this itself: the first time the
+context is used with any other provider configured (`UseSqlite(...)`, `UseSqlServer(...)`, and so on),
+Hindsight fails fast with a clear `InvalidOperationException` naming the provider it found and the one
+it needs, instead of letting you hit a confusing error later from EF Core's migrations or SQL
+generation.
+
 ## Choosing the history writer
 
 ```csharp

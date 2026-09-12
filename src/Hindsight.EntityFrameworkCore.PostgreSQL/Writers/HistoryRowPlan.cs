@@ -34,6 +34,14 @@ internal sealed class PendingHistoryRow
     public required EntityEntry? Entry { get; init; }
 
     /// <summary>
+    /// The main (non-history) entity type of the tracked entry. Used only for <c>Deleted</c> rows, by
+    /// <see cref="DeletedRowSnapshotReader"/>, to re-read the row's real column values from the source
+    /// table before EF Core deletes it — <see cref="EntityEntry.OriginalValues"/> cannot be trusted for
+    /// that (see the reader's remarks).
+    /// </summary>
+    public required IEntityType SourceEntityType { get; init; }
+
+    /// <summary>
     /// History column name → source property name for every versioned (non-excluded) column mirrored
     /// onto the history table, including the primary-key columns.
     /// </summary>
@@ -49,7 +57,10 @@ internal sealed class PendingHistoryRow
     public required string PeriodEndColumn { get; init; }
 
     /// <summary>
-    /// Versioned column values. Populated up front for <c>Deleted</c> (from original values); filled
+    /// Versioned column values. Populated up front for <c>Deleted</c> from <c>OriginalValues</c> — a
+    /// placeholder good only for its (always-trustworthy) key columns, see the remarks on that branch
+    /// in <see cref="HistoryRowPlan.BuildPending"/> — then overwritten by
+    /// <see cref="DeletedRowSnapshotReader"/> with the row's real values before the delete. Filled
     /// after the save for <c>Added</c>/<c>Modified</c> (from current values, so generated keys land).
     /// </summary>
     public Dictionary<string, object?> Values { get; } = new(StringComparer.Ordinal);
@@ -57,7 +68,9 @@ internal sealed class PendingHistoryRow
 
 /// <summary>
 /// Builds the list of <see cref="PendingHistoryRow"/> from a context's change tracker. Pure: reads
-/// metadata and tracked values, performs no I/O.
+/// metadata and tracked values, performs no I/O. A <c>Deleted</c> row's values are only a placeholder
+/// at this point — see <see cref="DeletedRowSnapshotReader"/>, which must run before any row this
+/// method returns is written to history.
 /// </summary>
 internal static class HistoryRowPlan
 {
@@ -131,6 +144,7 @@ internal static class HistoryRowPlan
                 HistoryEntityType = historyType,
                 State = entry.State,
                 Entry = entry.State == EntityState.Deleted ? null : entry,
+                SourceEntityType = entry.Metadata,
                 VersionedColumns = versionedColumns,
                 KeyColumns = keyColumns,
                 PeriodStartColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodStartColumnName]
@@ -141,6 +155,16 @@ internal static class HistoryRowPlan
 
             if (entry.State == EntityState.Deleted)
             {
+                // Placeholder only. EntityEntry.OriginalValues is the entity's real last-known state
+                // when it was loaded by a query, but for a "delete by id" that never loaded the entity
+                // (Remove(new T { Id = id }), or Attach then Remove) it is just whatever CLR-default
+                // stub values the caller's instance happened to hold — and the two cases are not
+                // reliably distinguishable from here. What's written here is only good enough to carry
+                // the (always-trustworthy, since the caller had to set it to identify the row) primary
+                // key through to DeletedRowSnapshotReader, which unconditionally overwrites every
+                // versioned column — key columns included — with the row's real values read fresh from
+                // the source table before the delete. Never write history rows from this loop's output
+                // without that step running first.
                 var original = entry.OriginalValues;
                 foreach (var (column, propertyName) in row.VersionedColumns)
                 {

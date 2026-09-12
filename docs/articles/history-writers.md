@@ -40,6 +40,20 @@ migration creates (or drops) the trigger function; it never touches your data or
    together — unless the context is configured with a retrying execution strategy
    (`EnableRetryOnFailure()`), in which case opening a transaction here would not survive a retry, and
    this throws instead; see [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
+
+   For a `Deleted` entity, `EntityEntry.OriginalValues` is not trustworthy on its own: it holds the
+   real last-loaded values only when the entity was queried first. The common "delete by id"
+   shorthand — `Remove(new Policy { Id = id })`, or `Attach` then `Remove` — never loads the entity,
+   so `OriginalValues` on that stub is just whatever CLR-default values the instance happened to hold
+   (`Status == default(PolicyStatus)`, `Premium == 0m`, …), and there is no reliable way to tell that
+   case apart from a genuinely loaded-then-removed entity. So, still within this step and still before
+   EF Core sends the `DELETE`, the interceptor re-reads every deleted entity's current row from its
+   main table by primary key (`SELECT … FOR UPDATE`, in the same transaction as the upcoming delete)
+   and uses those values instead — one extra round trip per `SaveChanges` that deletes at least one
+   temporal entity, paid even when the entity was already loaded, since the two cases cannot be told
+   apart cheaply. If no row matches (already deleted by another transaction, or a stub key that never
+   existed), this throws `InvalidOperationException` rather than write an empty or fabricated
+   tombstone.
 2. **The save runs** as usual, inside that transaction.
 3. **After the save** (`SavedChanges`): store-generated keys are now known, so for `Added` and
    `Modified` rows the interceptor re-reads the current values. Then, per entity:

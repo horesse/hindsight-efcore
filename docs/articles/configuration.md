@@ -163,6 +163,8 @@ using (db.WithReason("Backdated correction after audit"))
 ```
 
 `WithReason` works with or without a provider registered; scopes nest and the innermost one wins.
+The scope is tied to `db` specifically — a `SaveChanges` on a different `DbContext` instance, even
+one running inside the same `using` block, is never affected.
 
 ## Model validation
 

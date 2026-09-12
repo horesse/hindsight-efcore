@@ -77,6 +77,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   only ever followed the first argument of each method call in the chain, so a history-derived
   instance surfacing through that shape was never marked, and re-attaching it with `Update()` +
   `SaveChanges()` silently wrote the stale snapshot back as the current version instead of throwing.
+- `DbContext.WithReason("…")` now scopes its override to the specific `DbContext` instance it was
+  called on, in both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. It previously set
+  an `AsyncLocal` shared by the whole asynchronous control flow, so a `SaveChanges` on a *different*
+  `DbContext` running inside the same `using (dbA.WithReason(...))` block — a second, unrelated
+  context saved in the same method, the same request, or the same background job — silently picked up
+  `dbA`'s reason instead of its own (or `null`). The method signature is unchanged; nesting on the
+  same context still restores the previous value innermost-first on dispose.
 
 ### Changed
 

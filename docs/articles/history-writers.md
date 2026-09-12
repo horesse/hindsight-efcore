@@ -144,8 +144,9 @@ The `changed_by`, `changed_by_name`, `correlation_id`, `reason` and `extra` colu
 `SavingChanges`, alongside the timestamp, not once per row — and stamps the returned
 <xref:Hindsight.ChangeContext> onto every history row of that call: the `INSERT` of each new version
 carries it, while the `UPDATE` that closes the previous version leaves that row's original context
-untouched. `db.WithReason("…")` opens a scope that overrides `ChangeContext.Reason` for the
-`SaveChanges` calls inside it. A provider exception propagates and rolls the transaction back. See
+untouched. `db.WithReason("…")` opens a scope that overrides `ChangeContext.Reason` for `SaveChanges`
+calls on `db` — and only `db` — inside it. A provider exception propagates and rolls the transaction
+back. See
 [Configuration → Context configuration](configuration.md#context-configuration) for the provider
 contract and a worked example.
 

@@ -95,6 +95,62 @@ public sealed class InterceptorHistoryWriterTests(PostgresFixture postgres)
         Assert.Equal(tombstone.ValidFrom, tombstone.ValidTo);        // empty [ts, ts): never matches AsOf
     }
 
+    // Repro for the OriginalValues footgun: a "delete by id" that never loads the entity first attaches
+    // a stub with CLR-default values for everything but the key. EntityEntry.OriginalValues on that stub
+    // is the stub's own defaults, not the database's last known values, so a tombstone built from it is
+    // fabricated garbage (DESIGN.md D5/D12 promise the tombstone carries the real pre-delete values).
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    public async Task Delete_by_id_without_loading_writes_the_real_last_values_not_stub_defaults(HistoryWriter writer)
+    {
+        var time = new MutableTimeProvider(_t0);
+        var cs = await postgres.CreateDatabaseAsync(
+            nameof(Delete_by_id_without_loading_writes_the_real_last_values_not_stub_defaults), Ct);
+
+        await using (var seed = NewContext(cs, writer, time))
+        {
+            await seed.Database.EnsureCreatedAsync(Ct);
+            seed.Policies.Add(new Policy { Number = "ACME-1", Status = PolicyStatus.Active, Premium = 250.50m });
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        time.Advance(TimeSpan.FromHours(2));
+
+        // A separate DbContext: the entity is never queried, only stubbed with its key and removed —
+        // the common "delete by id" shorthand.
+        await using (var deleter = NewContext(cs, writer, time))
+        {
+            deleter.Policies.Remove(new Policy { Id = 1 });
+            await deleter.SaveChangesAsync(Ct);
+        }
+
+        var versions = await ReadHistoryAsync(cs, policyId: 1);
+
+        Assert.Equal(2, versions.Count);
+        var tombstone = versions[1];
+        Assert.Equal((short)3, tombstone.Operation);
+        Assert.Equal("ACME-1", tombstone.Number);     // not "" (the stub's CLR default)
+        Assert.Equal("Active", tombstone.Status);     // not "Draft" (default(PolicyStatus))
+        Assert.Equal(250.50m, tombstone.Premium);     // not 0m
+    }
+
+    // The re-read that makes the test above pass has to fail loudly, not silently, when there is no
+    // row to re-read — a stub whose key does not match anything is exactly the case that used to
+    // produce a fabricated all-defaults tombstone (CLAUDE.md rule 2).
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    public async Task Delete_of_a_nonexistent_row_throws_instead_of_writing_a_fabricated_tombstone(HistoryWriter writer)
+    {
+        var time = new MutableTimeProvider(_t0);
+        await using var h = await CreateAsync(
+            writer, nameof(Delete_of_a_nonexistent_row_throws_instead_of_writing_a_fabricated_tombstone), time);
+
+        h.Db.Policies.Remove(new Policy { Id = 999 });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => h.Db.SaveChangesAsync(Ct));
+        Assert.Contains("policies", ex.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
     public async Task Update_touching_only_an_excluded_property_writes_no_history_row(HistoryWriter writer)

@@ -132,6 +132,19 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
 
         var ownedTransaction = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
 
+        try
+        {
+            // Must run after the transaction above is open (it needs to lock rows that the DELETE
+            // about to execute in the same SaveChanges will also touch) and before this method returns
+            // control to EF Core, which sends that DELETE next.
+            DeletedRowSnapshotReader.Read(context, rows);
+        }
+        catch
+        {
+            RollbackAndDispose(ownedTransaction);
+            throw;
+        }
+
         _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
     }
 
@@ -146,7 +159,39 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         var ownedTransaction = await HistoryWriterTransaction.BeginIfNeededAsync(
             context, HistoryWriter.Interceptor, cancellationToken);
 
+        try
+        {
+            await DeletedRowSnapshotReader.ReadAsync(context, rows, cancellationToken);
+        }
+        catch
+        {
+            await RollbackAndDisposeAsync(ownedTransaction, cancellationToken);
+            throw;
+        }
+
         _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
+    }
+
+    private static void RollbackAndDispose(IDbContextTransaction? transaction)
+    {
+        if (transaction is null)
+        {
+            return;
+        }
+
+        transaction.Rollback();
+        transaction.Dispose();
+    }
+
+    private static async Task RollbackAndDisposeAsync(IDbContextTransaction? transaction, CancellationToken cancellationToken)
+    {
+        if (transaction is null)
+        {
+            return;
+        }
+
+        await transaction.RollbackAsync(cancellationToken);
+        await transaction.DisposeAsync();
     }
 
     private IReadOnlyList<PendingHistoryRow>? Snapshot(

@@ -83,6 +83,36 @@ public sealed class TriggerHistoryWriterTests(PostgresFixture postgres)
         Assert.Equal(tombstone.ValidFrom, tombstone.ValidTo);       // empty [ts, ts): never matches AsOf
     }
 
+    // Symmetry with InterceptorHistoryWriterTests.Delete_by_id_without_loading_writes_the_real_last_values_not_stub_defaults:
+    // Trigger mode reads OLD.* off the row PostgreSQL is actually deleting, so it was never susceptible
+    // to the OriginalValues-on-a-never-loaded-stub bug the Interceptor writer had — this pins that down
+    // for both writers in one place.
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
+    public async Task Delete_by_id_without_loading_writes_the_real_last_values_not_stub_defaults(HistoryWriter writer)
+    {
+        await using var h = await CreateAsync(
+            writer, nameof(Delete_by_id_without_loading_writes_the_real_last_values_not_stub_defaults));
+
+        var policy = new Policy { Number = "ACME-1", Status = PolicyStatus.Active, Premium = 250.50m };
+        h.Db.Policies.Add(policy);
+        await h.Db.SaveChangesAsync(Ct);
+
+        // A separate DbContext, same database: the entity is never queried, only stubbed with its key
+        // and removed — the common "delete by id" shorthand.
+        await using var deleter = NewContext(h.ConnectionString, writer);
+        deleter.Policies.Remove(new Policy { Id = policy.Id });
+        await deleter.SaveChangesAsync(Ct);
+
+        var versions = await ReadPolicyHistoryAsync(h.ConnectionString);
+        var tombstone = versions[^1];
+        Assert.Equal((short)3, tombstone.Operation);
+        Assert.Equal("ACME-1", tombstone.Number);     // not "" (the stub's CLR default)
+        Assert.Equal("Active", tombstone.Status);     // not "Draft" (default(PolicyStatus))
+        Assert.Equal(250.50m, tombstone.Premium);     // not 0m
+    }
+
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
     [InlineData(HistoryWriter.Trigger)]

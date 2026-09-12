@@ -42,6 +42,16 @@
 - The change-context columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`)
   are written `NULL` unless an `IChangeContextProvider` is registered
   (`UseHindsight(h => h.WithChangeContext<T>())`). Hindsight ships no default provider.
+- `HistoryWriter.Interceptor` deleting a temporal entity costs one extra round trip beyond the delete
+  itself — a `SELECT … FOR UPDATE` by primary key against the main table, in the same transaction as
+  the delete. It is paid on every delete, even one where the entity was already loaded, because
+  `EntityEntry.OriginalValues` cannot be trusted for an entity removed without being loaded first
+  (`Remove(new T { Id = id })`) and the two cases cannot be told apart cheaply; see
+  [History writers → How the interceptor writer works](history-writers.md#how-the-interceptor-writer-works).
+  If that row is not found — deleted concurrently, or a key that never existed — `SaveChanges` throws
+  `InvalidOperationException` rather than write an empty or fabricated tombstone.
+  `HistoryWriter.Trigger` pays no such cost: its trigger reads `OLD.*` off the row PostgreSQL is
+  actually deleting, so it is correct regardless of how the entity reached `Deleted`.
 - History tables grow without bound. Partitioning by `valid_from` and retention are v2; the schema is
   chosen so they can be added without migration of existing data.
 - **`UseNpgsql(cs, o => o.EnableRetryOnFailure())`** — a retrying execution strategy — is incompatible

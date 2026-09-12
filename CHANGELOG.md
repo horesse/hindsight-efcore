@@ -18,6 +18,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Fixed
 
+- `HistoryWriter.Interceptor` no longer writes a fabricated delete tombstone when an entity is removed
+  without being loaded first (`Remove(new Policy { Id = id })`, or `Attach` then `Remove`). It
+  previously trusted `EntityEntry.OriginalValues`, which for a never-loaded stub is just the CLR
+  defaults the caller's instance happened to hold, not the database's last known values — so the
+  tombstone silently carried garbage (all-default/null columns) instead of the entity's real
+  pre-delete state that `DESIGN.md` D5/D12 promise. `SaveChanges` now re-reads each deleted entity's
+  row from the database by primary key (`SELECT … FOR UPDATE`, in the same transaction as the delete)
+  before writing its tombstone; if no row matches, it throws `InvalidOperationException` instead of
+  writing an empty or fabricated one. One extra round trip per `SaveChanges` that deletes a temporal
+  entity — see [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs).
+  `HistoryWriter.Trigger` was never affected (it reads `OLD.*` from PostgreSQL directly).
 - Model validation: a temporal entity property whose column collides with a fixed history column
   (`history_id`, `operation`, `changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) or
   with its own period-start/period-end column now throws `InvalidOperationException` at model-build

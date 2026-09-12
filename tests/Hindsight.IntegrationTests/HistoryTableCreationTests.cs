@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 
 namespace Hindsight.IntegrationTests;
@@ -94,7 +95,15 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(
             nameof(History_table_is_not_created_without_UseHindsight), TestContext.Current.CancellationToken);
 
-        var options = new DbContextOptionsBuilder<PolicyContext>().UseNpgsql(cs).Options;
+        // ManyServiceProvidersCreatedWarning suppressed: a handful of test files across the process each
+        // construct a small number of deliberately distinct DbContext service-provider configurations
+        // for mocking/diffing (legitimate here, unlike the long-lived-production-singleton misuse this
+        // diagnostic exists to catch); whichever context is built next once the process-wide cumulative
+        // count crosses EF's built-in threshold throws, not necessarily one actually responsible for it.
+        var options = new DbContextOptionsBuilder<PolicyContext>()
+            .UseNpgsql(cs)
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
+            .Options;
         await using var db = new PolicyContext(options, useHindsight: false);
         await db.Database.EnsureCreatedAsync(TestContext.Current.CancellationToken);
 
@@ -113,7 +122,10 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
             nameof(Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table),
             ct);
 
-        var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>().UseNpgsql(cs).Options;
+        var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>()
+            .UseNpgsql(cs)
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
+            .Options;
         await using var db = new PolicyWithOwnedAddressContext(options);
 
         await Assert.ThrowsAsync<NotSupportedException>(() => db.Database.EnsureCreatedAsync(ct));
@@ -128,7 +140,10 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
     {
         var ct = TestContext.Current.CancellationToken;
         var cs = await postgres.CreateDatabaseAsync(name, ct);
-        var options = new DbContextOptionsBuilder<PolicyContext>().UseNpgsql(cs).Options;
+        var options = new DbContextOptionsBuilder<PolicyContext>()
+            .UseNpgsql(cs)
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning))
+            .Options;
         var db = new PolicyContext(options, useHindsight: true);
         await db.Database.EnsureCreatedAsync(ct);
         return (cs, db);

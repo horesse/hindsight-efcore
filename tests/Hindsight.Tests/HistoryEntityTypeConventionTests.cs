@@ -239,6 +239,77 @@ public sealed class HistoryEntityTypeConventionTests
         Assert.Single(columns, c => c == "reason");
     }
 
+    // PostgreSQL's NAMEDATALEN limit truncates any identifier over 63 bytes silently. The tightest of
+    // Hindsight's generated identifiers is the version index name, "ix_<history_table>_version" — with
+    // the default "_history" suffix that is "ix_" (3) + table (n) + "_history_version" (16) = n + 19
+    // bytes, so a main table name of 44 ASCII bytes lands exactly on the limit and 45 is one byte over.
+    [Fact]
+    public void Main_table_name_at_the_63_byte_identifier_limit_does_not_throw()
+    {
+        var mainTable = new string('a', 44);
+
+        var model = BuildModel(b => b.Entity<LongNameEntity>(e =>
+        {
+            e.ToTable(mainTable);
+            e.IsTemporal();
+        }));
+
+        Assert.NotNull(model.HistoryEntityType(typeof(LongNameEntity)));
+    }
+
+    [Fact]
+    public void Main_table_name_one_byte_over_the_63_byte_identifier_limit_throws_with_a_clear_message()
+    {
+        var mainTable = new string('a', 45);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b => b.Entity<LongNameEntity>(e =>
+        {
+            e.ToTable(mainTable);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains($"'{nameof(LongNameEntity)}'", ex.Message);
+        Assert.Contains("version index name", ex.Message);
+        Assert.Contains("64 bytes", ex.Message);
+        Assert.Contains("UseHistoryTable(", ex.Message);
+    }
+
+    [Fact]
+    public void UseHistoryTable_with_a_short_name_bypasses_a_main_table_name_over_the_limit()
+    {
+        // The main table name alone is 200 bytes — every identifier Hindsight would derive from it by
+        // default is far over the limit — but UseHistoryTable gives the history table (and everything
+        // derived from it) a short name instead, so validation must check the actual resolved history
+        // table name, not the main table name.
+        var mainTable = new string('a', 200);
+
+        var model = BuildModel(b => b.Entity<LongNameEntity>(e =>
+        {
+            e.ToTable(mainTable);
+            e.IsTemporal(t => t.UseHistoryTable("short_history"));
+        }));
+
+        Assert.Equal("short_history", model.HistoryEntityType(typeof(LongNameEntity)).GetTableName());
+    }
+
+    [Fact]
+    public void NonAscii_table_name_under_63_characters_but_over_63_bytes_throws()
+    {
+        // 23 Cyrillic characters are 23 UTF-16 chars but 46 UTF-8 bytes (2 bytes each): the version
+        // index name is then 19 + 23 = 42 characters (under 63) but 19 + 46 = 65 bytes (over 63) —
+        // proof the check counts UTF-8 bytes and not System.String.Length.
+        var mainTable = new string('а', 23);
+        Assert.True(mainTable.Length < 63);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b => b.Entity<LongNameEntity>(e =>
+        {
+            e.ToTable(mainTable);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("65 bytes", ex.Message);
+    }
+
     private static IModel BuildModel(Action<ModelBuilder> configure)
     {
         using var db = new TestContext(configure);
@@ -277,6 +348,12 @@ public sealed class HistoryEntityTypeConventionTests
     {
         public int Id { get; set; }
         public string Value { get; set; } = "";
+    }
+
+    // Table name set per-test via ToTable(...) — the 63-byte identifier limit tests need exact lengths.
+    private sealed class LongNameEntity
+    {
+        public int Id { get; set; }
     }
 
     private enum PolicyStatus

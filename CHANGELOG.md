@@ -43,6 +43,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Fixed
 
+- `AsOf()`, `AllVersions()` and `History<T>()` now throw `NotSupportedException` (DESIGN.md D7) when
+  combined with `ExecuteUpdate()` / `ExecuteUpdateAsync()` / `ExecuteDelete()` / `ExecuteDeleteAsync()`.
+  This closes a real data-corruption path, not just a documentation gap: EF Core's own `ExecuteUpdate`
+  translator resolved the rewritten query straight to a live `UPDATE` against the *history table*
+  (`policies_history`, not the main table) with no error at all — confirmed against real PostgreSQL for
+  all three markers. `ExecuteDelete` happened to be rejected by EF Core's own translator already, but
+  Hindsight no longer relies on that accident either; all four now fail before any SQL is generated.
 - Both writers now cooperate with an ambient `System.Transactions.TransactionScope` instead of failing
   inside it. Previously, `SaveChanges` called with no `context.Database.CurrentTransaction` open always
   tried to start one of its own — including inside a caller's `TransactionScope` that had already

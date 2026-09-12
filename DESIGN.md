@@ -168,6 +168,30 @@ identity-insert error from PostgreSQL in Interceptor mode, or as the entity's ow
 column being silently dropped forever with no error at all in Trigger mode, since the migrations
 generator excludes every fixed-name column from the trigger's versioned column list by name.
 
+PostgreSQL truncates any identifier over 63 bytes (`NAMEDATALEN - 1`, UTF-8 bytes not characters)
+silently, with no error — two identifiers that differ only after that point collide on the same
+physical object. Hindsight generates several from the main table name: the history table itself
+(`<table>_history`), the trigger function and trigger (`<history_table>_write`/`_trg`, Trigger mode
+only), and two indexes (`ix_<history_table>_version`, `ix_<history_table>_period`, D14, both modes).
+The tightest of these is the version index — `ix_` (3 bytes) + history table + `_version` (8 bytes),
+on top of the history table's own `_history` (8 bytes), is 19 bytes of fixed overhead — so a main
+table name of 44 ASCII bytes is the longest that keeps every generated identifier at or under 63
+bytes; 45 already puts the version index one byte over. `HistoryEntityTypeConvention
+.ValidateIdentifierLengths` computes every one of these identifiers for the entity's actual resolved
+history table name (a `UseHistoryTable(...)` override if there is one, not just the default
+derivation) and throws `InvalidOperationException` naming the offending identifier, its byte length,
+and the fix, at the same model-build point as the other checks in this section. Checked
+unconditionally rather than gated on `HistoryWriter.Trigger`, since a caller can switch writer modes
+later with `UseHistoryWriter(...)` without rebuilding the model. Confirmed against real PostgreSQL
+while investigating this bug: `CREATE TABLE`/`CREATE INDEX` on a collided name fails loudly ("relation
+... already exists") the first time the migration is applied, but `CREATE OR REPLACE FUNCTION` does
+not — it silently replaces the losing entity's trigger function body with the winning one's, and the
+losing entity's own trigger (unaffected, since triggers are scoped per table, not global) goes on
+calling the wrong function on every future write, corrupting that entity's history with no error
+anywhere. `dotnet ef migrations add` itself catches none of this — EF Core has no concept of
+PostgreSQL's identifier limit — so the collision would otherwise first surface as either of the above,
+against a real database, arbitrarily long after the entities were defined.
+
 Intervals are half-open `[valid_from, valid_to)`, everything is `timestamptz` in UTC.
 
 **Row per operation.** `insert` closes nothing and writes one open row (`valid_to = 'infinity'`).

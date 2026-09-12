@@ -222,18 +222,39 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         ];
     }
 
+    // HistorySnapshotGuardInterceptor.Guard runs first on SaveChanges (registered before this
+    // interceptor in HindsightOptionsExtension) and already walked ChangeTracker.Entries() once. With
+    // AutoDetectChangesEnabled on — the default — that call already ran the one DetectChanges() pass
+    // this SaveChanges needs; nothing mutates a tracked entity's properties between the two calls, so
+    // redoing it here would just re-scan the same graph for the same answer. A benchmark
+    // (ChangeTrackerOverheadBenchmarks in benchmarks/Hindsight.Benchmarks) showed this second scan
+    // scaling linearly with the number of tracked-but-unrelated entities in the context — real cost,
+    // not noise. Suppressing detection here is safe either way: if the caller left
+    // AutoDetectChangesEnabled on, Guard's call already did the work; if the caller turned it off
+    // themselves, this is a no-op. Always restored in `finally`, never left disabled for the rest of
+    // SaveChanges.
     private static bool HasTemporalChange(DbContext context)
     {
-        foreach (var entry in context.ChangeTracker.Entries())
+        var tracker = context.ChangeTracker;
+        var autoDetectChangesEnabled = tracker.AutoDetectChangesEnabled;
+        tracker.AutoDetectChangesEnabled = false;
+        try
         {
-            if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is true
-                && entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            foreach (var entry in tracker.Entries())
             {
-                return true;
+                if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is true
+                    && entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+                {
+                    return true;
+                }
             }
-        }
 
-        return false;
+            return false;
+        }
+        finally
+        {
+            tracker.AutoDetectChangesEnabled = autoDetectChangesEnabled;
+        }
     }
 
     private static (DbConnection Connection, DbTransaction? Transaction) Target(DbContext context)

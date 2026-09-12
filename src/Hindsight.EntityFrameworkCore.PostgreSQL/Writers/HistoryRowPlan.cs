@@ -79,100 +79,121 @@ internal static class HistoryRowPlan
         List<PendingHistoryRow>? rows = null;
         var model = context.Model;
 
-        foreach (var entry in context.ChangeTracker.Entries())
+        // HistorySnapshotGuardInterceptor.Guard runs first on SaveChanges (registered before this
+        // writer in HindsightOptionsExtension) and already walked ChangeTracker.Entries() once. With
+        // AutoDetectChangesEnabled on — the default — that call already ran the one DetectChanges()
+        // pass this SaveChanges needs; nothing mutates a tracked entity's properties between the two
+        // calls, so redoing it here would just re-scan the same graph (every tracked entity, not only
+        // temporal ones) for the same answer. A benchmark (ChangeTrackerOverheadBenchmarks in
+        // benchmarks/Hindsight.Benchmarks) showed this second scan scaling linearly with the number of
+        // tracked-but-unrelated entities in the context — real cost, not noise. Suppressing detection
+        // here is safe either way: if the caller left AutoDetectChangesEnabled on, Guard's call already
+        // did the work; if the caller turned it off themselves, this is a no-op. Always restored in
+        // `finally`, never left disabled for the rest of SaveChanges.
+        var tracker = context.ChangeTracker;
+        var autoDetectChangesEnabled = tracker.AutoDetectChangesEnabled;
+        tracker.AutoDetectChangesEnabled = false;
+        try
         {
-            if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is not true)
+            foreach (var entry in tracker.Entries())
             {
-                continue;
-            }
-
-            if (entry.State is not (EntityState.Added or EntityState.Modified or EntityState.Deleted))
-            {
-                continue;
-            }
-
-            if (entry.Metadata[HindsightAnnotationNames.HistoryEntityType] is not string historyTypeName
-                || model.FindEntityType(historyTypeName) is not { } historyType)
-            {
-                continue;
-            }
-
-            if (entry.State == EntityState.Modified && !HasVersionedModification(entry))
-            {
-                // DESIGN.md D5 / configuration.md: a SaveChanges that touched only excluded
-                // properties writes no history row.
-                continue;
-            }
-
-            var versionedColumns = new List<KeyValuePair<string, string>>();
-            foreach (var property in entry.Metadata.GetProperties())
-            {
-                if (property.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is true)
+                if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is not true)
                 {
                     continue;
                 }
 
-                if (property.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
+                if (entry.State is not (EntityState.Added or EntityState.Modified or EntityState.Deleted))
                 {
-                    versionedColumns.Add(new KeyValuePair<string, string>(column, property.Name));
+                    continue;
                 }
-            }
 
-            var keyColumns = new List<string>();
-            foreach (var keyProperty in entry.Metadata.FindPrimaryKey()!.Properties)
-            {
-                if (keyProperty.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
+                if (entry.Metadata[HindsightAnnotationNames.HistoryEntityType] is not string historyTypeName
+                    || model.FindEntityType(historyTypeName) is not { } historyType)
                 {
-                    keyColumns.Add(column);
+                    continue;
                 }
-            }
 
-            if (keyColumns.Count == 0)
-            {
-                // HistoryEntityTypeConvention.ValidateTemporalEntityType rejects a temporal entity whose
-                // entire primary key is Exclude()-d at model build time, so that specific cause can no
-                // longer reach a SaveChanges. This stays as a defensive fallback rather than an assert:
-                // keyColumns can in principle also end up empty via a PK property with no column mapping,
-                // or one the history type never mirrored for some other reason, and neither of those is
-                // covered by that check. Skip rather than write a history row with no way to address the
-                // previous version.
-                continue;
-            }
-
-            var row = new PendingHistoryRow
-            {
-                HistoryEntityType = historyType,
-                State = entry.State,
-                Entry = entry.State == EntityState.Deleted ? null : entry,
-                SourceEntityType = entry.Metadata,
-                VersionedColumns = versionedColumns,
-                KeyColumns = keyColumns,
-                PeriodStartColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodStartColumnName]
-                    ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName,
-                PeriodEndColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodEndColumnName]
-                    ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName,
-            };
-
-            if (entry.State == EntityState.Deleted)
-            {
-                // Placeholder only. EntityEntry.OriginalValues is the entity's real last-known state
-                // when it was loaded by a query, but for a "delete by id" that never loaded the entity
-                // (Remove(new T { Id = id }), or Attach then Remove) it is just whatever CLR-default
-                // stub values the caller's instance happened to hold — and the two cases are not
-                // reliably distinguishable from here. What's written here is only good enough to carry
-                // the (always-trustworthy, since the caller had to set it to identify the row) primary
-                // key through to DeletedRowSnapshotReader, which unconditionally overwrites every
-                // versioned column — key columns included — with the row's real values read fresh from
-                // the source table before the delete. Never write history rows from this loop's output
-                // without that step running first.
-                var original = entry.OriginalValues;
-                foreach (var (column, propertyName) in row.VersionedColumns)
+                if (entry.State == EntityState.Modified && !HasVersionedModification(entry))
                 {
-                    row.Values[column] = original[propertyName];
+                    // DESIGN.md D5 / configuration.md: a SaveChanges that touched only excluded
+                    // properties writes no history row.
+                    continue;
                 }
-            }
 
-            (rows ??= []).Add(row);
+                var versionedColumns = new List<KeyValuePair<string, string>>();
+                foreach (var property in entry.Metadata.GetProperties())
+                {
+                    if (property.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is true)
+                    {
+                        continue;
+                    }
+
+                    if (property.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
+                    {
+                        versionedColumns.Add(new KeyValuePair<string, string>(column, property.Name));
+                    }
+                }
+
+                var keyColumns = new List<string>();
+                foreach (var keyProperty in entry.Metadata.FindPrimaryKey()!.Properties)
+                {
+                    if (keyProperty.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
+                    {
+                        keyColumns.Add(column);
+                    }
+                }
+
+                if (keyColumns.Count == 0)
+                {
+                    // HistoryEntityTypeConvention.ValidateTemporalEntityType rejects a temporal entity whose
+                    // entire primary key is Exclude()-d at model build time, so that specific cause can no
+                    // longer reach a SaveChanges. This stays as a defensive fallback rather than an assert:
+                    // keyColumns can in principle also end up empty via a PK property with no column mapping,
+                    // or one the history type never mirrored for some other reason, and neither of those is
+                    // covered by that check. Skip rather than write a history row with no way to address the
+                    // previous version.
+                    continue;
+                }
+
+                var row = new PendingHistoryRow
+                {
+                    HistoryEntityType = historyType,
+                    State = entry.State,
+                    Entry = entry.State == EntityState.Deleted ? null : entry,
+                    SourceEntityType = entry.Metadata,
+                    VersionedColumns = versionedColumns,
+                    KeyColumns = keyColumns,
+                    PeriodStartColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodStartColumnName]
+                        ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName,
+                    PeriodEndColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodEndColumnName]
+                        ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName,
+                };
+
+                if (entry.State == EntityState.Deleted)
+                {
+                    // Placeholder only. EntityEntry.OriginalValues is the entity's real last-known state
+                    // when it was loaded by a query, but for a "delete by id" that never loaded the entity
+                    // (Remove(new T { Id = id }), or Attach then Remove) it is just whatever CLR-default
+                    // stub values the caller's instance happened to hold — and the two cases are not
+                    // reliably distinguishable from here. What's written here is only good enough to carry
+                    // the (always-trustworthy, since the caller had to set it to identify the row) primary
+                    // key through to DeletedRowSnapshotReader, which unconditionally overwrites every
+                    // versioned column — key columns included — with the row's real values read fresh from
+                    // the source table before the delete. Never write history rows from this loop's output
+                    // without that step running first.
+                    var original = entry.OriginalValues;
+                    foreach (var (column, propertyName) in row.VersionedColumns)
+                    {
+                        row.Values[column] = original[propertyName];
+                    }
+                }
+
+                (rows ??= []).Add(row);
+            }
+        }
+        finally
+        {
+            tracker.AutoDetectChangesEnabled = autoDetectChangesEnabled;
         }
 
         return rows ?? [];

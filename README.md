@@ -30,8 +30,11 @@ var audit = await db.History<Policy>()
 | Needs superuser / extension install | ❌ plain user, PG 14+ | — | ✅ C extension | ❌ |
 | History schema in EF migrations | ✅ | ✅ | ❌ by hand | ❌ |
 | `AsOf()` as typed LINQ | ✅ | ✅ | ❌ raw SQL | ❌ |
-| Who / why / correlation id | ✅ from the app | ❌ | ❌ trigger sees rows only | ✅ |
+| Who / why / correlation id | ✅ from the app¹ | ❌ | ❌ trigger sees rows only | ✅ |
 | Half-open `[from, to)` intervals, `infinity` for current | ✅ | ✅ | ✅ | — |
+
+¹ application-asserted, not database-guaranteed — see [Trust
+model](docs/articles/configuration.md#trust-model).
 
 PostgreSQL 19 brings *application-time* periods (`FOR PORTION OF`, `WITHOUT OVERLAPS`).
 It does **not** bring *system-time* versioning — "when did the database hold this row" — and that

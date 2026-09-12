@@ -202,6 +202,11 @@ change.
 Bulk writes (`ExecuteUpdate` / `ExecuteDelete`) and raw SQL still get full history rows — the trigger
 sees them — but with `NULL` context columns, because nothing pushed a `ChangeContext` for them.
 
+`set_config('hindsight.*', ..., true)` is an ordinary, unauthenticated session setting: it carries no
+proof of who or what set it, so anything with a plain database connection can set the same keys before
+writing and have the trigger record it as if it came from your application. See [Configuration → Trust
+model](configuration.md#trust-model) for exactly what that does and does not protect against.
+
 ## Benchmarks
 
 From `benchmarks/Hindsight.Benchmarks` (BenchmarkDotNet). The entry point starts one PostgreSQL 17

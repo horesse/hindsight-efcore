@@ -253,6 +253,11 @@ MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only
 publishing uses nuget.org Trusted Publishing (OIDC) behind a reviewed `nuget` environment — no API key is stored.
 Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the public surface.
 
+**2.0 milestone tracking.** Whether `HistoryWriter.Trigger` becomes the default writer (see Open
+questions) is a decision reserved for a deliberate 2.0 release — it needs a major version bump and its
+own upgrade-guide migration note, not a patch. A GitHub milestone for 2.0 should carry this question so
+it isn't lost between now and whenever that release is actually cut.
+
 ## D12. `AsOf` / `AllVersions` translate by query-root replacement — resolved by spike, 2026-09-10
 
 `queryable.AsOf(at)` is a marker method. A public `IQueryExpressionInterceptor.QueryCompilationStarting`
@@ -473,4 +478,43 @@ D6 already covers for the table itself).
 
 ## Open questions (resolve in the spike, then move up)
 
-_None open._
+### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12
+
+Not decided. `HistoryWriter.Interceptor` is `= 0` and therefore what `UseHindsight()` gives a caller
+who never calls `UseHistoryWriter(...)` — see `Infrastructure/HindsightOptionsExtension.cs`. D3
+already recommends `Trigger` in production and README/`docs/articles/history-writers.md` say so too,
+but the silent default is still the structurally weaker writer.
+
+**The case for switching.** `Trigger` has no known correctness gap versus `Interceptor`: it is immune
+to the clock-skew and backwards-clock exposure D3 documents for `Interceptor` (timestamps come from
+`now()` inside the writing transaction, not an application `TimeProvider` that can disagree across
+instances), and it sees `ExecuteUpdate` / `ExecuteDelete` / raw SQL / other-process writes (D4), which
+`Interceptor` structurally cannot. A new user who never reads the writer comparison table currently
+gets the weaker guarantees by default; that is exactly the kind of trap rule 2 exists to avoid at the
+API level, not just in prose.
+
+**The case for keeping `Interceptor` as the default.** D3 already names `Interceptor`'s one legitimate
+remaining use case: "environments where trigger creation is forbidden by policy" — some managed
+PostgreSQL setups and some organizations' database-permission policies do not grant an application
+role `CREATE FUNCTION` / `CREATE TRIGGER`, only `SELECT`/`INSERT`/`UPDATE`/`DELETE` on specific tables.
+For those callers, `Trigger` is not just non-default, it is unusable, and a default flip would turn
+`UseHindsight()` alone into a runtime failure on `dotnet ef migrations add` (a `CREATE FUNCTION` the
+role can't execute) for anyone in that position who upgrades without reading the changelog.
+
+**The migration path this needs, if we do it.** Flipping the default is a breaking behavior change
+(D11: MinVer semver from git tags), and it is not just a code default — an existing 1.x user who
+upgrades to 2.0 with no explicit `UseHistoryWriter(...)` call would silently: (a) start getting
+`now()` timestamps instead of `TimeProvider` ones (breaks any test or code that reasoned about
+injected time), and (b) get trigger DDL — `CREATE FUNCTION` / `CREATE TRIGGER` — injected into their
+*next* `dotnet ef migrations add`, which they did not ask for and which may fail outright if their
+migration role lacks the privilege. A bare "default changed" line in `CHANGELOG.md` is not enough.
+The 2.0 upgrade guide needs its own migration-path section spelling out, roughly: "2.0 changes the
+default `HistoryWriter` from `Interceptor` to `Trigger`. If you never called `UseHistoryWriter(...)`
+explicitly, upgrading will change your history's timestamp source from `TimeProvider` to `now()` and
+add trigger DDL to your next migration. If you need to defer this — including if your database role
+cannot create functions or triggers — pin `UseHistoryWriter(HistoryWriter.Interceptor)` explicitly
+before upgrading, which keeps 1.x behavior unchanged."
+
+**What would make us revisit/resolve this:** a decision, before a 2.0 milestone is cut, on whether the
+default flips (see D11 — a 2.0 milestone should track this so it isn't decided by drive-by PR); if it
+does, the upgrade guide above ships in the same release, not after.

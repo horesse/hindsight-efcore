@@ -40,6 +40,19 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
                 + "AsTrackingWithIdentityResolution() from the query.");
         }
 
+        if (scan.HasBulkOperation)
+        {
+            throw new NotSupportedException(
+                "AsOf() / AllVersions() / History<T>() cannot be combined with ExecuteUpdate() / ExecuteDelete() "
+                + "(DESIGN.md D7): historical results are read-only, and unlike a tracked SaveChanges these bulk "
+                + "operations bypass that guard entirely — EF Core translates the rewritten query's source directly, "
+                + "which for ExecuteUpdate resolves to an UPDATE against the history table itself, silently "
+                + "corrupting the audit trail (ExecuteDelete happens to be rejected by EF Core's own translator "
+                + "today, but that is not a guarantee this package can rely on). Load the matching current entities "
+                + "with a normal query (no AsOf / AllVersions / History<T>()) and call ExecuteUpdate / ExecuteDelete "
+                + "on those instead.");
+        }
+
         var model = eventData.Context?.Model
             ?? throw new InvalidOperationException(
                 "AsOf() / AllVersions() / History<T>(): the query has no DbContext model to resolve the history table from.");
@@ -56,8 +69,8 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
     /// <summary>
     /// One pass over the tree recording whether it uses <c>AsOf</c>, <c>AllVersions</c> or
     /// <c>History&lt;T&gt;</c>, and — so their combination can be rejected with a Hindsight message
-    /// rather than a downstream EF one — whether it also uses <c>Include</c> / <c>ThenInclude</c> or
-    /// an explicit tracking operator.
+    /// rather than a downstream EF one — whether it also uses <c>Include</c> / <c>ThenInclude</c>, an
+    /// explicit tracking operator, or <c>ExecuteUpdate</c> / <c>ExecuteDelete</c>.
     /// </summary>
     private sealed class MarkerScanner : ExpressionVisitor
     {
@@ -66,6 +79,8 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         public bool HasInclude { get; private set; }
 
         public bool HasTrackingOperator { get; private set; }
+
+        public bool HasBulkOperation { get; private set; }
 
         public static MarkerScanner Scan(Expression expression)
         {
@@ -92,6 +107,13 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
                 else if (method.Name == nameof(EntityFrameworkQueryableExtensions.AsTracking))
                 {
                     HasTrackingOperator = true;
+                }
+                else if (method.Name is nameof(EntityFrameworkQueryableExtensions.ExecuteUpdate)
+                    or nameof(EntityFrameworkQueryableExtensions.ExecuteUpdateAsync)
+                    or nameof(EntityFrameworkQueryableExtensions.ExecuteDelete)
+                    or nameof(EntityFrameworkQueryableExtensions.ExecuteDeleteAsync))
+                {
+                    HasBulkOperation = true;
                 }
             }
 

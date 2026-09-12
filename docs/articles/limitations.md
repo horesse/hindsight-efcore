@@ -8,6 +8,13 @@
   with a second `AsOf()` query.
 - **`AsOf()` not first in the query** — `db.Set<T>().Where(...).AsOf(t)` throws; `AsOf` must be the
   first operator, on the `DbSet` itself.
+- **`AsOf()` / `AllVersions()` / `History<T>()` with `ExecuteUpdate()` / `ExecuteDelete()`** — throws
+  `NotSupportedException` (DESIGN.md D7). Historical results are read-only, and this is not just a
+  documented restriction: EF Core's own `ExecuteUpdate` translator resolves the rewritten query
+  straight to an `UPDATE` against the history table itself, corrupting the audit trail, rather than
+  erroring out (`ExecuteDelete` happens to be rejected by EF Core today, but Hindsight does not rely
+  on that). Load the matching current entities with a normal query and call `ExecuteUpdate` /
+  `ExecuteDelete` on those instead.
 - **Owned references / complex properties on a temporal entity** — rejected outright: `IsTemporal()`
   throws `NotSupportedException` at model finalization, before any history table is built. Their
   columns live on their own `IEntityType` / complex type, not the owner's, so mirroring them into

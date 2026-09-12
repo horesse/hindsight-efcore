@@ -256,6 +256,50 @@ runs before any service provider necessarily exists to inspect. The only case Hi
 the loud one — `ValidateScopes` on — where the thrown `InvalidOperationException` names the provider
 and this section instead of forwarding ASP.NET Core's generic, Hindsight-unaware message on its own.
 
+### Trust model
+
+The change-context columns are **not tamper-resistant against anything that can open its own
+connection to the database.**
+
+Under `HistoryWriter.Interceptor`, the values come from your `IChangeContextProvider` and are bound
+as ordinary parameters on the history `INSERT` your application issues — this path is only as
+trustworthy as your application code itself.
+
+Under `HistoryWriter.Trigger`, Hindsight pushes the same values into the session with
+`set_config('hindsight.changed_by', ..., true)` (and one `set_config` per column) once per
+`SaveChanges`, and the trigger function reads them back with `current_setting('hindsight.changed_by',
+true)` when it writes a history row — see [History writers → Change
+context](history-writers.md#change-context). `set_config` with `is_local = true` sets a value for the
+rest of the *current transaction*, nothing more: it is not authenticated, not tied to a role or login,
+and not scoped to Hindsight's own code path in any way. **Any session with an ordinary (non-superuser)
+connection to the database can run:**
+
+```sql
+SELECT set_config('hindsight.changed_by', 'someone-else', true);
+UPDATE policies SET status = 'Active' WHERE id = 1;
+```
+
+and the resulting history row will show `changed_by = 'someone-else'`, indistinguishable from a value
+the application itself pushed. The same applies to `changed_by_name`, `correlation_id`, `reason` and
+`extra`. Nothing here is bound to anything PostgreSQL itself vouches for — `session_user`,
+`current_user`, `inet_client_addr()`, the role a connection actually authenticated as — because
+Hindsight does not currently capture any of those (see `DESIGN.md` for an open design question about
+adding one as a separate, additional column).
+
+This is a deliberate trade-off (DESIGN.md D3), not an oversight: Hindsight assumes
+
+- the application's own database credentials are not shared with untrusted parties, and
+- raw `psql` (or any other direct-connection tool) access to the production database is itself
+  controlled and audited by means outside Hindsight — the same assumption almost every application
+  already makes about its production database.
+
+If your threat model includes people or processes with a legitimate, ordinary database connection who
+should *not* be able to forge `changed_by` on a history row, treat the change-context columns as
+**application-asserted, not database-guaranteed** — the same trust level as, say, a `created_by`
+column an application sets on an ordinary table. Do not present them as a non-repudiation mechanism
+without an additional, independent control (e.g. row-level security limiting who can run
+`set_config('hindsight.*', ...)`, or an external audit log of raw database access).
+
 ## Model validation
 
 Hindsight validates the model at build time — the same point `dotnet ef migrations add` builds it at

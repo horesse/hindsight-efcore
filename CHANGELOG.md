@@ -22,6 +22,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   on the entity's primary key forced a sequential scan of the whole history table for the
   period-overlap predicate. No new PostgreSQL extension is required — range types have a native GiST
   operator class in PostgreSQL core. No new public API.
+- A temporal entity whose history table name (default or `UseHistoryTable(...)`) would produce a
+  generated table, trigger function, trigger, or index name over 63 bytes now fails fast at model-build
+  time with a clear `InvalidOperationException`, instead of silently colliding with another entity's
+  identifier once PostgreSQL truncates it (`NAMEDATALEN - 1`) — a collision that fails loudly for a
+  table or index but is a *silent* history corruption for the trigger function, which PostgreSQL simply
+  replaces with no error. See [Model validation](docs/articles/configuration.md#model-validation). No
+  new public API.
 
 ### Fixed
 

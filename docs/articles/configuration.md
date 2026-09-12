@@ -274,7 +274,16 @@ Hindsight validates the model at build time — the same point `dotnet ef migrat
   `operation`, `changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) or with the
   entity's own period-start/period-end column — rename the property's column, exclude it, or (for a
   period-column collision) pick different period column names;
-- the period-start and period-end column names are the same.
+- the period-start and period-end column names are the same;
+- the history table name, or any name Hindsight derives from it (the trigger function and trigger in
+  `HistoryWriter.Trigger` mode, or either of the two indexes), would exceed 63 bytes — PostgreSQL's
+  identifier limit (`NAMEDATALEN - 1`; it counts UTF-8 bytes, not characters). PostgreSQL truncates a
+  longer identifier to 63 bytes silently instead of erroring, so two entities whose names differ only
+  after that point can end up sharing the same physical table, index, function or trigger — a
+  `CREATE TABLE`/`CREATE INDEX` collision fails loudly when the migration is applied, but `CREATE OR
+  REPLACE FUNCTION` does not: it silently replaces one entity's trigger function body with the
+  other's. Give the entity a shorter history table name with `UseHistoryTable("shorter_name")`, or
+  rename its main table.
 
 A history table name that collides with another table in the model is also rejected, but by EF
 Core's own model validation rather than a Hindsight-specific message, since the history entity type

@@ -152,6 +152,93 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
     [InlineData(HistoryWriter.Trigger)]
+    public async Task WithReason_scopes_the_override_to_the_context_it_was_called_on_not_other_contexts(HistoryWriter writer)
+    {
+        // Two independent DbContext instances over the same database. WithReason is called on
+        // dbA only; a SaveChanges on dbB inside that scope must not see dbA's reason.
+        var suffix = writer == HistoryWriter.Trigger ? "_trg" : "_int";
+        const string dbName = nameof(WithReason_scopes_the_override_to_the_context_it_was_called_on_not_other_contexts);
+        var trimmed = dbName.Length > 58 ? dbName[..58] : dbName;
+        var cs = await postgres.CreateDatabaseAsync(trimmed + suffix, Ct);
+        var time = new MutableTimeProvider(_t0);
+
+        var options = new DbContextOptionsBuilder<PolicyContext>()
+            .UseNpgsql(cs)
+            .UseApplicationServiceProvider(new StubServiceProvider(new Dictionary<Type, object> { [typeof(TimeProvider)] = time }))
+            .UseHindsight(hb => hb.UseHistoryWriter(writer))
+            .Options;
+
+        await using var dbA = new PolicyContext(options);
+        await dbA.Database.EnsureCreatedAsync(Ct);
+        await using var dbB = new PolicyContext(options);
+
+        var policyA = NewPolicy("ACME-A");
+        dbA.Policies.Add(policyA);
+        await dbA.SaveChangesAsync(Ct);
+
+        var policyB = NewPolicy("ACME-B");
+        dbB.Policies.Add(policyB);
+        await dbB.SaveChangesAsync(Ct);
+
+        time.Advance(TimeSpan.FromMinutes(10));
+        using (dbA.WithReason("A's reason"))
+        {
+            policyA.Premium = 111m;
+            await dbA.SaveChangesAsync(Ct);
+
+            policyB.Premium = 222m;
+            await dbB.SaveChangesAsync(Ct); // must NOT get "A's reason"
+        }
+
+        var rowsA = await ReadContextAsync(cs, policyId: policyA.Id);
+        var rowsB = await ReadContextAsync(cs, policyId: policyB.Id);
+        Assert.Equal("A's reason", rowsA[^1].Reason);
+        Assert.Null(rowsB[^1].Reason); // dbB has no provider and was never given a reason of its own
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
+    public async Task WithReason_nested_on_the_same_context_innermost_wins_and_restores_on_dispose(HistoryWriter writer)
+    {
+        var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u", Reason = "provider reason" });
+        var time = new MutableTimeProvider(_t0);
+        await using var h = await CreateAsync(
+            writer, nameof(WithReason_nested_on_the_same_context_innermost_wins_and_restores_on_dispose), time, provider);
+
+        var policy = NewPolicy();
+        h.Db.Policies.Add(policy);
+        await h.Db.SaveChangesAsync(Ct);
+
+        time.Advance(TimeSpan.FromMinutes(10));
+        using (h.Db.WithReason("outer"))
+        {
+            using (h.Db.WithReason("inner"))
+            {
+                policy.Premium = 111m;
+                await h.Db.SaveChangesAsync(Ct); // innermost wins
+            }
+
+            time.Advance(TimeSpan.FromMinutes(10));
+            policy.Premium = 222m;
+            await h.Db.SaveChangesAsync(Ct); // restored to the outer scope after the inner one disposed
+        }
+
+        time.Advance(TimeSpan.FromMinutes(10));
+        policy.Premium = 333m;
+        await h.Db.SaveChangesAsync(Ct); // restored to the provider after the outer scope disposed
+
+        var rows = await ReadContextAsync(h.ConnectionString, policyId: 1);
+        Assert.Equal(4, rows.Count);
+        Assert.Equal("provider reason", rows[0].Reason);
+        Assert.Equal("inner", rows[1].Reason);
+        Assert.Equal("outer", rows[2].Reason);
+        Assert.Equal("provider reason", rows[3].Reason);
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
     public async Task WithReason_works_without_a_registered_provider(HistoryWriter writer)
     {
         await using var h = await CreateAsync(

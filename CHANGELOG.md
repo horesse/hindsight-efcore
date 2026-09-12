@@ -71,6 +71,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   restored the same way; this remains a documented caveat — see
   [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
   [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+- `DbContext.WithReason("…")` now scopes its override to the specific `DbContext` instance it was
+  called on, in both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. It previously set
+  an `AsyncLocal` shared by the whole asynchronous control flow, so a `SaveChanges` on a *different*
+  `DbContext` running inside the same `using (dbA.WithReason(...))` block — a second, unrelated
+  context saved in the same method, the same request, or the same background job — silently picked up
+  `dbA`'s reason instead of its own (or `null`). The method signature is unchanged; nesting on the
+  same context still restores the previous value innermost-first on dispose.
 
 ## [1.0.0] - 2026-09-11
 

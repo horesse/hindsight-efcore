@@ -200,7 +200,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         }
 
         var provider = ResolveProvider(context);
-        var scopedReason = ChangeReasonScope.Current;
+        var scopedReason = ChangeReasonScope.CurrentFor(context);
         if (provider is null && scopedReason is null)
         {
             return null;

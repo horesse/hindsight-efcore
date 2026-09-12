@@ -222,7 +222,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         var changeContext = ResolveChangeContextProvider(context)?.GetChangeContext(context)
             ?? ChangeContext.Empty;
 
-        if (ChangeReasonScope.Current is { } scopedReason)
+        if (ChangeReasonScope.CurrentFor(context) is { } scopedReason)
         {
             changeContext = changeContext with { Reason = scopedReason };
         }

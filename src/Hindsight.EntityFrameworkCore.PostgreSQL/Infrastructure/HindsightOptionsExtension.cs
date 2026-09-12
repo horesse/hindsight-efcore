@@ -93,8 +93,48 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
             HistoryWriter));
     }
 
+    // The name of the assembly Npgsql.EntityFrameworkCore.PostgreSQL registers its provider extension
+    // from. It is the same string DbContext.Database.ProviderName reports once a context built with
+    // UseNpgsql(...) exists (verified against Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3) — Validate
+    // runs earlier than that, before a service provider exists to ask, so this reads the equivalent
+    // value straight off the extension's own declaring assembly instead. 'internal' rather than
+    // 'private' only to satisfy the repo's private-field naming rule, which expects a leading
+    // underscore.
+    internal const string NpgsqlProviderAssemblyName = "Npgsql.EntityFrameworkCore.PostgreSQL";
+
     public void Validate(IDbContextOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
+        // Every relational (or other) database provider registers exactly one extension that reports
+        // IsDatabaseProvider — that is the public marker for "this extension selects the provider",
+        // see DbContextOptionsExtensionInfo.IsDatabaseProvider. It can be absent: UseHindsight() can be
+        // called before, or without, UseNpgsql()/UseSqlite()/etc. That is not Hindsight's mistake to
+        // report — EF Core itself throws its own clear "No database provider has been configured" error
+        // the moment the context is used, so just let that happen instead of second-guessing it here.
+        var providerExtension = options.Extensions.FirstOrDefault(extension => extension.Info.IsDatabaseProvider);
+        if (providerExtension is null)
+        {
+            return;
+        }
+
+        // Identify which provider it is by the assembly its extension type was declared in. This is
+        // deliberately not a cast to, or a using of, Npgsql's own NpgsqlOptionsExtension — that type
+        // lives in an `.Internal` namespace (golden rule 1) and is never referenced here. Reading
+        // Type.Assembly.GetName().Name is public System.Reflection metadata, nothing more than asking
+        // "which package produced this object" — the same identity DbContext.Database.ProviderName
+        // exposes for a fully built context.
+        var providerAssemblyName = providerExtension.GetType().Assembly.GetName().Name;
+        if (string.Equals(providerAssemblyName, NpgsqlProviderAssemblyName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Hindsight only supports the Npgsql/PostgreSQL provider ('{NpgsqlProviderAssemblyName}'), but "
+            + $"this DbContext is configured with '{providerAssemblyName}'. Providers other than "
+            + "Npgsql/PostgreSQL are a non-goal (README.md, Non-goals); configure the context with "
+            + "UseNpgsql(...) instead of UseSqlite(...)/UseSqlServer(...)/etc.");
     }
 
     private sealed class ExtensionInfo(HindsightOptionsExtension extension)

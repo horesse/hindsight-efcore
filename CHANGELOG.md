@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `UseHindsight()` now validates that the context is configured with the Npgsql/PostgreSQL provider,
+  the only one Hindsight supports (see
+  [Limitations → Not in v1](docs/articles/limitations.md#not-in-v1)). The check runs the first time
+  the context is used, so `UseSqlite(...).UseHindsight()` (or any other provider) now fails fast with
+  a clear `InvalidOperationException` naming the provider found and the one required, instead of
+  surfacing a confusing DI-resolution or SQL-generation error later from `EnsureCreated`,
+  `dotnet ef migrations add`, or `SaveChanges`. No new public API.
 - Every history table now also gets a `gist (tstzrange(valid_from, valid_to))` period-range index
   (`ix_<history_table>_period`), created by the migration alongside the table in both
   `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `DESIGN.md` and

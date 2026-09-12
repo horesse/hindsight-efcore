@@ -26,6 +26,9 @@
     <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.0" />
     <PackageVersion Include="Verify.XunitV3" Version="32.0.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
+    <!-- Not a supported Hindsight provider (README.md non-goals) - used only by
+         HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <!-- Benchmarks -->

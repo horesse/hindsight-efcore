@@ -1,10 +1,8 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Hindsight.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Hindsight.Writers;
 
@@ -24,11 +22,6 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // context, removed in SavedChanges / SaveChangesFailed. Deliberately not a plain field — the
     // interceptor is shared between contexts and a field would race (CLAUDE.md rule 5).
     private readonly ConditionalWeakTable<DbContext, SaveState> _pending = new();
-
-    // Parameterless-constructor factories for change context providers that are not registered in the
-    // application service provider. Compiled once per type, not per SaveChanges (library-code rule:
-    // no reflection on the hot path).
-    private static readonly ConcurrentDictionary<Type, Func<object>> _providerActivators = new();
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -82,11 +75,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var state))
         {
             _pending.Remove(context);
-            if (state.OwnedTransaction is { } transaction)
-            {
-                transaction.Rollback();
-                transaction.Dispose();
-            }
+            RollbackAndDispose(context, state.TransactionOutcome);
         }
 
         base.SaveChangesFailed(eventData);
@@ -98,11 +87,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var state))
         {
             _pending.Remove(context);
-            if (state.OwnedTransaction is { } transaction)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                await transaction.DisposeAsync();
-            }
+            await RollbackAndDisposeAsync(context, state.TransactionOutcome, cancellationToken);
         }
 
         await base.SaveChangesFailedAsync(eventData, cancellationToken);
@@ -130,9 +115,22 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var ownedTransaction = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
+        var transactionOutcome = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
+        try
+        {
+            // Must run after the transaction above is open (it needs to lock rows that the DELETE
+            // about to execute in the same SaveChanges will also touch) and before this method returns
+            // control to EF Core, which sends that DELETE next.
+            DeletedRowSnapshotReader.Read(context, rows);
+        }
+        catch
+        {
+            RollbackAndDispose(context, transactionOutcome);
+            throw;
+        }
+
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, transactionOutcome));
     }
 
     private async Task PrepareAsync(DbContext context, CancellationToken cancellationToken)
@@ -143,10 +141,43 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var ownedTransaction = await HistoryWriterTransaction.BeginIfNeededAsync(
+        var transactionOutcome = await HistoryWriterTransaction.BeginIfNeededAsync(
             context, HistoryWriter.Interceptor, cancellationToken);
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
+        try
+        {
+            await DeletedRowSnapshotReader.ReadAsync(context, rows, cancellationToken);
+        }
+        catch
+        {
+            await RollbackAndDisposeAsync(context, transactionOutcome, cancellationToken);
+            throw;
+        }
+
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, transactionOutcome));
+    }
+
+    private static void RollbackAndDispose(DbContext context, HistoryWriterTransaction.Outcome transactionOutcome)
+    {
+        if (transactionOutcome.OwnedTransaction is { } transaction)
+        {
+            transaction.Rollback();
+            transaction.Dispose();
+        }
+
+        transactionOutcome.CloseAmbientConnection(context);
+    }
+
+    private static async Task RollbackAndDisposeAsync(
+        DbContext context, HistoryWriterTransaction.Outcome transactionOutcome, CancellationToken cancellationToken)
+    {
+        if (transactionOutcome.OwnedTransaction is { } transaction)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            await transaction.DisposeAsync();
+        }
+
+        await transactionOutcome.CloseAmbientConnectionAsync(context);
     }
 
     private IReadOnlyList<PendingHistoryRow>? Snapshot(
@@ -174,51 +205,15 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // set with DbContext.WithReason(...) overrides whatever the provider put in ChangeContext.Reason.
     private static ChangeContext CaptureChangeContext(DbContext context)
     {
-        var changeContext = ResolveChangeContextProvider(context)?.GetChangeContext(context)
+        var changeContext = ChangeContextProviderResolver.Resolve(context)?.GetChangeContext(context)
             ?? ChangeContext.Empty;
 
-        if (ChangeReasonScope.Current is { } scopedReason)
+        if (ChangeReasonScope.CurrentFor(context) is { } scopedReason)
         {
             changeContext = changeContext with { Reason = scopedReason };
         }
 
         return changeContext;
-    }
-
-    private static IChangeContextProvider? ResolveChangeContextProvider(DbContext context)
-    {
-        var providerType = context.GetService<IDbContextOptions>()
-            .FindExtension<HindsightOptionsExtension>()
-            ?.ChangeContextProviderType;
-        if (providerType is null)
-        {
-            return null;
-        }
-
-        var applicationServiceProvider = context.GetService<IDbContextOptions>()
-            .FindExtension<CoreOptionsExtension>()
-            ?.ApplicationServiceProvider;
-
-        if (applicationServiceProvider?.GetService(providerType) is IChangeContextProvider fromServices)
-        {
-            return fromServices;
-        }
-
-        var activator = _providerActivators.GetOrAdd(providerType, CreateActivator);
-        return (IChangeContextProvider)activator();
-    }
-
-    private static Func<object> CreateActivator(Type providerType)
-    {
-        if (providerType.GetConstructor(Type.EmptyTypes) is null)
-        {
-            throw new InvalidOperationException(
-                $"Change context provider '{providerType.FullName}' is not registered on the "
-                + "application service provider and has no parameterless constructor. Register it with "
-                + "the DbContext's application service provider, or give it a parameterless constructor.");
-        }
-
-        return () => Activator.CreateInstance(providerType)!;
     }
 
     private static void Complete(DbContext context, SaveState state)
@@ -227,17 +222,18 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         {
             HistoryRowPlan.FillGeneratedValues(state.Rows);
             HistoryRowWriter.Write(context, state.Timestamp, state.ChangeContext, state.Rows);
-            state.OwnedTransaction?.Commit();
+            state.TransactionOutcome.OwnedTransaction?.Commit();
         }
         catch
         {
-            state.OwnedTransaction?.Rollback();
+            state.TransactionOutcome.OwnedTransaction?.Rollback();
             RestoreEntityStates(state.Rows);
             throw;
         }
         finally
         {
-            state.OwnedTransaction?.Dispose();
+            state.TransactionOutcome.OwnedTransaction?.Dispose();
+            state.TransactionOutcome.CloseAmbientConnection(context);
         }
     }
 
@@ -249,14 +245,14 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             await HistoryRowWriter.WriteAsync(
                 context, state.Timestamp, state.ChangeContext, state.Rows, cancellationToken);
 
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.CommitAsync(cancellationToken);
             }
         }
         catch
         {
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.RollbackAsync(cancellationToken);
             }
@@ -266,10 +262,12 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
         finally
         {
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.DisposeAsync();
             }
+
+            await state.TransactionOutcome.CloseAmbientConnectionAsync(context);
         }
     }
 
@@ -298,5 +296,5 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         DateTimeOffset Timestamp,
         ChangeContext ChangeContext,
         IReadOnlyList<PendingHistoryRow> Rows,
-        IDbContextTransaction? OwnedTransaction);
+        HistoryWriterTransaction.Outcome TransactionOutcome);
 }

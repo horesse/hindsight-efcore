@@ -125,9 +125,12 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
     [InlineData(HistoryWriter.Trigger)]
     public async Task Ambient_TransactionScope_with_retry_enabled_throws(HistoryWriter writer)
     {
-        // Independent known EF Core caveat (retry + ambient TransactionScope) plus, once the writer
-        // would actually touch a transaction, Hindsight's own guard: either way this must throw, never
-        // silently write history outside the caller's ambient transaction.
+        // An independent, EF-Core-native guard, not Hindsight's own: a retrying execution strategy
+        // refuses to run at all under an ambient TransactionScope (a transient failure could not be
+        // retried inside it), regardless of whether Hindsight ever touches a transaction. Confirmed
+        // unaffected by HistoryWriterTransaction now cooperating with an ambient TransactionScope
+        // instead of opening its own — see AmbientTransactionScopeTests for the (no-retry) success
+        // path and docs/articles/configuration.md.
         var cs = await postgres.CreateDatabaseAsync(DbName("ambient_txscope_retry", writer), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())
@@ -140,46 +143,19 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
 
         await using var db = new WidgetContext(options);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
             db.Widgets.Add(new Widget { Name = "c" });
             await db.SaveChangesAsync(Ct);
             scope.Complete();
         });
-    }
 
-    [Theory]
-    [InlineData(HistoryWriter.Interceptor)]
-    [InlineData(HistoryWriter.Trigger)]
-    public async Task Ambient_TransactionScope_without_retry_also_throws_a_preexisting_and_unrelated_error(
-        HistoryWriter writer)
-    {
-        // Control for the scenario above: this fails identically with EnableRetryOnFailure absent, so
-        // the ambient-TransactionScope incompatibility is a pre-existing limitation of "the writer
-        // opens its own transaction" (DESIGN.md D3) and not something the retry-strategy fix introduces
-        // or needs to solve — see docs/articles/limitations.md.
-        var cs = await postgres.CreateDatabaseAsync(DbName("ambient_txscope_no_retry", writer), Ct);
-        var options = new DbContextOptionsBuilder<WidgetContext>()
-            .UseNpgsql(cs) // no EnableRetryOnFailure
-            .UseHindsight(h => h.UseHistoryWriter(writer).WithChangeContext<StubChangeContextProvider>())
-            .Options;
-        await using (var setup = new WidgetContext(options))
-        {
-            await setup.Database.EnsureCreatedAsync(Ct);
-        }
-
-        await using var db = new WidgetContext(options);
-
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-        {
-            using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
-            db.Widgets.Add(new Widget { Name = "d" });
-            await db.SaveChangesAsync(Ct);
-            scope.Complete();
-        });
-
-        Assert.Contains("ambient transaction", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // EF Core's own message, not Hindsight's — confirms this is the execution-strategy guard, not
+        // HistoryWriterTransaction.ThrowIfRetryStrategyConfigured (which never runs for an ambient
+        // transaction — see its doc comment).
+        Assert.Contains("does not support user-initiated transactions", ex.Message);
+        Assert.Equal(0, await db.Widgets.CountAsync(Ct));
     }
 
     private sealed class Widget

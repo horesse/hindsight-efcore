@@ -1,3 +1,5 @@
+using System.Text;
+using Hindsight.Migrations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -30,6 +32,13 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     internal const string TimestamptzColumnType = "timestamp with time zone";
     internal const string PeriodEndDefaultSql = "'infinity'::timestamp with time zone";
     internal const string ExtraColumnType = "jsonb";
+
+    // PostgreSQL's NAMEDATALEN is 64, so any identifier (table, column, function, trigger, index name)
+    // longer than this is silently truncated to it, in bytes — not characters; PostgreSQL counts UTF-8
+    // bytes, and a quoted identifier can be non-ASCII. Two identifiers that share the same first 63
+    // bytes become the same physical object with no error from PostgreSQL and none from EF Core either
+    // (see ValidateIdentifierLengths).
+    internal const int MaxIdentifierBytes = 63;
 
     // Building the snapshot model runs the finalizing conventions again (this one included); the flag
     // stops the re-entrant pass from resolving the snapshot a second time.
@@ -118,6 +127,50 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         }
 
         ValidateReservedColumnNames(entityType);
+
+        // Unconditional rather than gated on HistoryWriter.Trigger (the trigger function/trigger name
+        // only matter in that mode): a caller can switch writer modes later with UseHistoryWriter(...)
+        // without touching the model, and by then a writer-gated check would already have skipped this
+        // entity while it was still in Interceptor mode. Checking every identifier unconditionally
+        // costs nothing at model-build time and never has to be re-run.
+        ValidateIdentifierLengths(entityType, ResolveHistoryTableName(entityType));
+    }
+
+    // PostgreSQL truncates any identifier over MaxIdentifierBytes to that length, silently and with no
+    // error (NAMEDATALEN - 1). Two entities whose generated table, function, trigger or index name
+    // differ only after that many bytes become the SAME physical object once a migration is applied to
+    // real PostgreSQL: CREATE TABLE / CREATE INDEX on the collided name then fails loudly ("relation ...
+    // already exists"), but CREATE OR REPLACE FUNCTION does not — it silently replaces the losing
+    // entity's trigger function body with the winning one's, and the losing entity's own trigger (itself
+    // unaffected, since triggers are scoped per relation, not global) goes on calling the wrong function
+    // on every future insert/update/delete, corrupting that entity's history with no error anywhere
+    // (CLAUDE.md rule 2). EF Core itself performs no such check at model-build or migration-generation
+    // time, so `dotnet ef migrations add` succeeds silently for both entities; the collision only
+    // surfaces once the generated SQL reaches PostgreSQL. Reject it here instead.
+    private static void ValidateIdentifierLengths(IConventionEntityType entityType, string historyTableName)
+    {
+        CheckIdentifierLength(entityType, "history table name", historyTableName);
+        CheckIdentifierLength(entityType, "trigger function name", HistoryTriggerSqlGenerator.FunctionName(historyTableName));
+        CheckIdentifierLength(entityType, "trigger name", HistoryTriggerSqlGenerator.TriggerName(historyTableName));
+        CheckIdentifierLength(entityType, "version index name", VersionIndexName(historyTableName));
+        CheckIdentifierLength(entityType, "period-range index name", HistoryIndexSqlGenerator.IndexName(historyTableName));
+    }
+
+    private static void CheckIdentifierLength(IConventionEntityType entityType, string kind, string identifier)
+    {
+        var byteLength = Encoding.UTF8.GetByteCount(identifier);
+        if (byteLength <= MaxIdentifierBytes)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Entity '{entityType.DisplayName()}' is temporal but its generated {kind} '{identifier}' is "
+            + $"{byteLength} bytes long, which exceeds PostgreSQL's {MaxIdentifierBytes}-byte identifier "
+            + "limit (NAMEDATALEN - 1). PostgreSQL truncates identifiers over that length silently "
+            + "instead of erroring, so two entities whose names collide only after that point can end up "
+            + "sharing the same physical table, index, function or trigger. Give the entity a shorter "
+            + "history table name with UseHistoryTable(\"shorter_name\"), or rename its main table.");
     }
 
     // Every column Hindsight fixes on the history table (DESIGN.md D5): the surrogate key, the change
@@ -199,11 +252,18 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         }
     }
 
+    // Shared with ValidateIdentifierLengths, which must reject on the actual resolved history table
+    // name — the caller-chosen UseHistoryTable(...) override when there is one, not the default
+    // derivation from the main table name — rather than re-deriving it and risking the two falling out
+    // of sync.
+    private static string ResolveHistoryTableName(IConventionEntityType source)
+        => (string?)source[HindsightAnnotationNames.HistoryTableName]
+            ?? source.GetTableName() + TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix;
+
     private static IConventionEntityTypeBuilder? BuildHistoryEntityType(
         IConventionModelBuilder modelBuilder, IConventionEntityType source)
     {
-        var historyTableName = (string?)source[HindsightAnnotationNames.HistoryTableName]
-            ?? source.GetTableName() + TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix;
+        var historyTableName = ResolveHistoryTableName(source);
         var historySchema = (string?)source[HindsightAnnotationNames.HistoryTableSchema] ?? source.GetSchema();
 
         var historyBuilder = modelBuilder.SharedTypeEntity(historyTableName, typeof(Dictionary<string, object>));
@@ -596,9 +656,12 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
         columns.Add(periodStart);
 
-        var index = historyBuilder.HasIndex(columns, "ix_" + historyBuilder.Metadata.GetTableName() + "_version");
+        var index = historyBuilder.HasIndex(columns, VersionIndexName(historyBuilder.Metadata.GetTableName()!));
         index?.IsDescending([.. Enumerable.Repeat(false, columns.Count - 1), true]);
     }
+
+    /// <summary>The name of the version index for a history table: <c>ix_&lt;history_table&gt;_version</c>.</summary>
+    private static string VersionIndexName(string historyTable) => "ix_" + historyTable + "_version";
 
     private static Type AsNullable(Type clrType)
         => clrType.IsValueType && Nullable.GetUnderlyingType(clrType) is null

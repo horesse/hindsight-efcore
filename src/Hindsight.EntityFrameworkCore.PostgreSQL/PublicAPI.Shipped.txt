@@ -1,1 +1,83 @@
 #nullable enable
+const Hindsight.HindsightAnnotationNames.HistoryTableName = "Hindsight:HistoryTableName" -> string!
+const Hindsight.HindsightAnnotationNames.HistoryTableSchema = "Hindsight:HistoryTableSchema" -> string!
+const Hindsight.HindsightAnnotationNames.IsExcluded = "Hindsight:IsExcluded" -> string!
+const Hindsight.HindsightAnnotationNames.IsTemporal = "Hindsight:IsTemporal" -> string!
+const Hindsight.HindsightAnnotationNames.PeriodEndColumnName = "Hindsight:PeriodEnd" -> string!
+const Hindsight.HindsightAnnotationNames.PeriodStartColumnName = "Hindsight:PeriodStart" -> string!
+const Hindsight.HindsightAnnotationNames.Prefix = "Hindsight:" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix = "_history" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName = "valid_to" -> string!
+const Hindsight.TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName = "valid_from" -> string!
+Hindsight.ChangeContext
+Hindsight.ChangeContext.<Clone>$() -> Hindsight.ChangeContext!
+Hindsight.ChangeContext.ChangeContext() -> void
+Hindsight.ChangeContext.CorrelationId.get -> string?
+Hindsight.ChangeContext.CorrelationId.init -> void
+Hindsight.ChangeContext.Equals(Hindsight.ChangeContext? other) -> bool
+Hindsight.ChangeContext.Extra.get -> string?
+Hindsight.ChangeContext.Extra.init -> void
+Hindsight.ChangeContext.Reason.get -> string?
+Hindsight.ChangeContext.Reason.init -> void
+Hindsight.ChangeContext.UserId.get -> string?
+Hindsight.ChangeContext.UserId.init -> void
+Hindsight.ChangeContext.UserName.get -> string?
+Hindsight.ChangeContext.UserName.init -> void
+Hindsight.HindsightAnnotationNames
+Hindsight.HindsightDbContextExtensions
+Hindsight.HindsightDbContextOptionsExtensions
+Hindsight.HindsightOptionsBuilder
+Hindsight.HindsightOptionsBuilder.UseHistoryWriter(Hindsight.HistoryWriter writer) -> Hindsight.HindsightOptionsBuilder!
+Hindsight.HindsightOptionsBuilder.WithChangeContext<TProvider>() -> Hindsight.HindsightOptionsBuilder!
+Hindsight.HindsightQueryableExtensions
+Hindsight.HistoryWriter
+Hindsight.Version<TEntity>
+Hindsight.Version<TEntity>.ChangedBy.get -> string?
+Hindsight.Version<TEntity>.ChangedBy.init -> void
+Hindsight.Version<TEntity>.ChangedByName.get -> string?
+Hindsight.Version<TEntity>.ChangedByName.init -> void
+Hindsight.Version<TEntity>.CorrelationId.get -> string?
+Hindsight.Version<TEntity>.CorrelationId.init -> void
+Hindsight.Version<TEntity>.Entity.get -> TEntity!
+Hindsight.Version<TEntity>.Entity.init -> void
+Hindsight.Version<TEntity>.Extra.get -> string?
+Hindsight.Version<TEntity>.Extra.init -> void
+Hindsight.Version<TEntity>.IsCurrent.get -> bool
+Hindsight.Version<TEntity>.Operation.get -> Hindsight.VersionOperation
+Hindsight.Version<TEntity>.Operation.init -> void
+Hindsight.Version<TEntity>.Reason.get -> string?
+Hindsight.Version<TEntity>.Reason.init -> void
+Hindsight.Version<TEntity>.ValidFrom.get -> System.DateTimeOffset
+Hindsight.Version<TEntity>.ValidFrom.init -> void
+Hindsight.Version<TEntity>.ValidTo.get -> System.DateTimeOffset
+Hindsight.Version<TEntity>.ValidTo.init -> void
+Hindsight.Version<TEntity>.Version() -> void
+Hindsight.VersionOperation
+Hindsight.VersionOperation.Delete = 3 -> Hindsight.VersionOperation
+Hindsight.VersionOperation.Insert = 1 -> Hindsight.VersionOperation
+Hindsight.VersionOperation.Update = 2 -> Hindsight.VersionOperation
+Hindsight.HistoryWriter.Interceptor = 0 -> Hindsight.HistoryWriter
+Hindsight.HistoryWriter.Trigger = 1 -> Hindsight.HistoryWriter
+Hindsight.IChangeContextProvider
+Hindsight.IChangeContextProvider.GetChangeContext(Microsoft.EntityFrameworkCore.DbContext! context) -> Hindsight.ChangeContext!
+Hindsight.TemporalEntityTypeBuilder<TEntity>
+Hindsight.TemporalEntityTypeBuilder<TEntity>.Exclude<TProperty>(System.Linq.Expressions.Expression<System.Func<TEntity!, TProperty>!>! property) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodEnd(string! columnName) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.HasPeriodStart(string! columnName) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.UseHistoryTable(string! name, string? schema = null) -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.TemporalEntityTypeBuilderExtensions
+override Hindsight.ChangeContext.Equals(object? obj) -> bool
+override Hindsight.ChangeContext.GetHashCode() -> int
+override Hindsight.ChangeContext.ToString() -> string!
+static Hindsight.ChangeContext.Empty.get -> Hindsight.ChangeContext!
+static Hindsight.ChangeContext.operator !=(Hindsight.ChangeContext? left, Hindsight.ChangeContext? right) -> bool
+static Hindsight.ChangeContext.operator ==(Hindsight.ChangeContext? left, Hindsight.ChangeContext? right) -> bool
+static Hindsight.HindsightDbContextExtensions.WithReason(this Microsoft.EntityFrameworkCore.DbContext! context, string! reason) -> System.IDisposable!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! optionsBuilder) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
+static Hindsight.HindsightDbContextOptionsExtensions.UseHindsight<TContext>(this Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>! optionsBuilder, System.Action<Hindsight.HindsightOptionsBuilder!>! configure) -> Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<TContext!>!
+static Hindsight.HindsightQueryableExtensions.AllVersions<TEntity>(this System.Linq.IQueryable<TEntity!>! source) -> System.Linq.IQueryable<TEntity!>!
+static Hindsight.HindsightQueryableExtensions.AsOf<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset asOf) -> System.Linq.IQueryable<TEntity!>!
+static Hindsight.HindsightQueryableExtensions.History<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context) -> System.Linq.IQueryable<Hindsight.Version<TEntity!>!>!
+static Hindsight.TemporalEntityTypeBuilderExtensions.IsTemporal<TEntity>(this Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>! builder, System.Action<Hindsight.TemporalEntityTypeBuilder<TEntity!>!>? configure = null) -> Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>!

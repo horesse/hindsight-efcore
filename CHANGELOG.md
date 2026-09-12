@@ -25,6 +25,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Fixed
 
+- Both writers now cooperate with an ambient `System.Transactions.TransactionScope` instead of failing
+  inside it. Previously, `SaveChanges` called with no `context.Database.CurrentTransaction` open always
+  tried to start one of its own — including inside a caller's `TransactionScope` that had already
+  enlisted the connection — which EF Core rejected with
+  `InvalidOperationException: An ambient transaction has been detected...`, in both writer modes,
+  regardless of `EnableRetryOnFailure()`. Hindsight now checks for
+  `System.Transactions.Transaction.Current` first and, when one is present, opens no transaction of its
+  own: it opens the connection explicitly instead, so Npgsql enlists it in the ambient transaction, and
+  lets that transaction own commit/rollback for the data change and the history row(s) together, exactly
+  as a transaction Hindsight opens itself would. See
+  [Configuration → Ambient TransactionScope](docs/articles/configuration.md#ambient-transactionscope).
+  (A retrying execution strategy still cannot be combined with an ambient `TransactionScope` — that is
+  an independent, EF-Core-native restriction, unchanged by this fix; see
+  [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).)
 - `HistoryWriter.Interceptor` no longer writes a fabricated delete tombstone when an entity is removed
   without being loaded first (`Remove(new Policy { Id = id })`, or `Attach` then `Remove`). It
   previously trusted `EntityEntry.OriginalValues`, which for a never-loaded stub is just the CLR

@@ -4,7 +4,6 @@ using Hindsight.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Hindsight.Writers;
 
@@ -82,11 +81,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var state))
         {
             _pending.Remove(context);
-            if (state.OwnedTransaction is { } transaction)
-            {
-                transaction.Rollback();
-                transaction.Dispose();
-            }
+            RollbackAndDispose(context, state.TransactionOutcome);
         }
 
         base.SaveChangesFailed(eventData);
@@ -98,11 +93,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var state))
         {
             _pending.Remove(context);
-            if (state.OwnedTransaction is { } transaction)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                await transaction.DisposeAsync();
-            }
+            await RollbackAndDisposeAsync(context, state.TransactionOutcome, cancellationToken);
         }
 
         await base.SaveChangesFailedAsync(eventData, cancellationToken);
@@ -130,7 +121,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var ownedTransaction = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
+        var transactionOutcome = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Interceptor);
 
         try
         {
@@ -141,11 +132,11 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
         catch
         {
-            RollbackAndDispose(ownedTransaction);
+            RollbackAndDispose(context, transactionOutcome);
             throw;
         }
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, transactionOutcome));
     }
 
     private async Task PrepareAsync(DbContext context, CancellationToken cancellationToken)
@@ -156,7 +147,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var ownedTransaction = await HistoryWriterTransaction.BeginIfNeededAsync(
+        var transactionOutcome = await HistoryWriterTransaction.BeginIfNeededAsync(
             context, HistoryWriter.Interceptor, cancellationToken);
 
         try
@@ -165,33 +156,34 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
         catch
         {
-            await RollbackAndDisposeAsync(ownedTransaction, cancellationToken);
+            await RollbackAndDisposeAsync(context, transactionOutcome, cancellationToken);
             throw;
         }
 
-        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, ownedTransaction));
+        _pending.AddOrUpdate(context, new SaveState(timestamp, changeContext, rows, transactionOutcome));
     }
 
-    private static void RollbackAndDispose(IDbContextTransaction? transaction)
+    private static void RollbackAndDispose(DbContext context, HistoryWriterTransaction.Outcome transactionOutcome)
     {
-        if (transaction is null)
+        if (transactionOutcome.OwnedTransaction is { } transaction)
         {
-            return;
+            transaction.Rollback();
+            transaction.Dispose();
         }
 
-        transaction.Rollback();
-        transaction.Dispose();
+        transactionOutcome.CloseAmbientConnection(context);
     }
 
-    private static async Task RollbackAndDisposeAsync(IDbContextTransaction? transaction, CancellationToken cancellationToken)
+    private static async Task RollbackAndDisposeAsync(
+        DbContext context, HistoryWriterTransaction.Outcome transactionOutcome, CancellationToken cancellationToken)
     {
-        if (transaction is null)
+        if (transactionOutcome.OwnedTransaction is { } transaction)
         {
-            return;
+            await transaction.RollbackAsync(cancellationToken);
+            await transaction.DisposeAsync();
         }
 
-        await transaction.RollbackAsync(cancellationToken);
-        await transaction.DisposeAsync();
+        await transactionOutcome.CloseAmbientConnectionAsync(context);
     }
 
     private IReadOnlyList<PendingHistoryRow>? Snapshot(
@@ -272,17 +264,18 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         {
             HistoryRowPlan.FillGeneratedValues(state.Rows);
             HistoryRowWriter.Write(context, state.Timestamp, state.ChangeContext, state.Rows);
-            state.OwnedTransaction?.Commit();
+            state.TransactionOutcome.OwnedTransaction?.Commit();
         }
         catch
         {
-            state.OwnedTransaction?.Rollback();
+            state.TransactionOutcome.OwnedTransaction?.Rollback();
             RestoreEntityStates(state.Rows);
             throw;
         }
         finally
         {
-            state.OwnedTransaction?.Dispose();
+            state.TransactionOutcome.OwnedTransaction?.Dispose();
+            state.TransactionOutcome.CloseAmbientConnection(context);
         }
     }
 
@@ -294,14 +287,14 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             await HistoryRowWriter.WriteAsync(
                 context, state.Timestamp, state.ChangeContext, state.Rows, cancellationToken);
 
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.CommitAsync(cancellationToken);
             }
         }
         catch
         {
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.RollbackAsync(cancellationToken);
             }
@@ -311,10 +304,12 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
         finally
         {
-            if (state.OwnedTransaction is { } transaction)
+            if (state.TransactionOutcome.OwnedTransaction is { } transaction)
             {
                 await transaction.DisposeAsync();
             }
+
+            await state.TransactionOutcome.CloseAmbientConnectionAsync(context);
         }
     }
 
@@ -343,5 +338,5 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         DateTimeOffset Timestamp,
         ChangeContext ChangeContext,
         IReadOnlyList<PendingHistoryRow> Rows,
-        IDbContextTransaction? OwnedTransaction);
+        HistoryWriterTransaction.Outcome TransactionOutcome);
 }

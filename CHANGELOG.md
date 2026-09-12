@@ -92,6 +92,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
   table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
   writer when `UseHistoryWriter(...)` is never called.
+- `SaveChanges` no longer runs a redundant full `ChangeTracker.DetectChanges()` pass over every tracked
+  entity — not just temporal ones — when `HistoryRowPlan.BuildPending` (`HistoryWriter.Interceptor`) or
+  `HistoryTriggerContextInterceptor.HasTemporalChange` (`HistoryWriter.Trigger`) call
+  `ChangeTracker.Entries()`. `HistorySnapshotGuardInterceptor.Guard` already walks `Entries()` earlier
+  in the same `SaveChanges`, and with `AutoDetectChangesEnabled` on (the default) that call already ran
+  the one `DetectChanges()` pass needed; nothing mutates a tracked entity's properties between the two
+  calls. The second call now temporarily disables `AutoDetectChangesEnabled` around its own walk and
+  reuses `Guard`'s result instead of re-scanning. No behavior change for correctness — only measured on
+  a context that also tracks many untouched entities alongside the one that actually changed, where
+  managed allocations drop by roughly a third (about 32% at 10,000 tracked-but-unchanged entities, both
+  writer modes) — see [History writers → Tracked-but-unchanged entities](docs/articles/history-writers.md#tracked-but-unchanged-entities).
 
 ## [1.0.0] - 2026-09-11
 

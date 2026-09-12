@@ -87,6 +87,39 @@ SQL is parameterised: identifiers go through EF Core's `ISqlGenerationHelper` an
 history column's type mapping, so an `enum` stored as text, a `jsonb` column or a `numeric(18,4)`
 column lands in history exactly as it does in the main table.
 
+### What happens if the history write fails
+
+The history write (step 3 above) runs in `SavedChanges`/`SavedChangesAsync` — after EF Core's own
+`SaveChanges` pipeline has already sent the data change to the database **and** called
+`ChangeTracker.AcceptAllChanges()`, which happens strictly before the `SavedChanges` interceptor event
+fires. `AcceptAllChanges()` flips every `Added`/`Modified` entry to `Unchanged` and detaches every
+`Deleted` entry. If the history write then fails — malformed `ChangeContext.Extra` JSON that PostgreSQL's
+`jsonb` cast rejects, a transient connection failure between the data write and the history write, or the
+transaction commit itself failing — the interceptor rolls back the transaction it owns, so **nothing is
+persisted**: the data change and the history rows fail together, exactly as if `SaveChanges` had never
+run. That part is unconditionally safe.
+
+What is not automatically safe is the caller's `ChangeTracker`: without this fix, entities would already
+read `Unchanged` (or, for a delete, be gone from the tracker) by the time the exception reaches the
+caller, even though nothing was actually saved. A caller catching the exception and calling
+`SaveChanges()` again would find nothing `Added`/`Modified`/`Deleted` left to save and silently do
+nothing — a correctness trap distinct from any data corruption (the database itself is always correct).
+
+Hindsight closes this for `Added` and `Modified`: before rethrowing, the interceptor re-marks each
+affected entry with the `EntityState` it had before the save (`entry.State = row.State`), using the
+`EntityEntry` it kept in `PendingHistoryRow` for exactly this purpose. A plain retry —
+`try { await db.SaveChangesAsync(); } catch { await db.SaveChangesAsync(); }`, no reload — then actually
+retries and, once the underlying problem is fixed (e.g. a corrected `IChangeContextProvider`), succeeds
+and writes the same history a first successful attempt would have.
+
+**The `Deleted` case cannot be recovered the same way.** `PendingHistoryRow.Entry` is `null` for a
+delete by design — the entry is already detached by `AcceptAllChanges()` before the interceptor's own
+snapshot is even read back, so there is nothing left in the tracker to re-mark. A failed history write
+after a deletion rolls back the database correctly (the row is still there), but the entity instance the
+caller was holding stays `Detached` in the `ChangeTracker`. The caller must re-query the entity (or call
+`Remove` on a freshly loaded instance) rather than retry `SaveChanges()` on the same tracked instance —
+see [Limitations → Known trade-offs](limitations.md#known-trade-offs).
+
 ### What it does not see
 
 `ExecuteUpdate`, `ExecuteDelete`, `FromSql` writes, `SqlQuery`, and any change made by another process
@@ -136,6 +169,17 @@ The timestamp source is the one behavioural difference you can observe: the inte
 registered `TimeProvider` (so tests can inject time), the trigger uses `now()`. A second, smaller
 difference: an `UPDATE` that assigns a versioned column *its current value* writes a history row under
 the interceptor (EF marks the property modified) but not under the trigger (the values are equal).
+
+The trigger writer does not have the [interceptor's post-accept failure gap](#what-happens-if-the-history-write-fails).
+Its history rows are written by the trigger as part of the same statement/transaction as the data
+change itself — there is no separate history write in `SavedChanges` that could fail after
+`AcceptAllChanges()` has already run. `HistoryTriggerContextInterceptor.SavedChanges`/`SavedChangesAsync`
+only commits the transaction it opened in `SavingChanges` (before the save); by the time that commit
+runs, the data change and the trigger's history rows already succeeded together, or the whole
+`SaveChanges` call already failed and threw before `AcceptAllChanges()` ever ran. The one residual risk —
+the commit itself failing after everything else succeeded — is the same generic risk any code that opens
+its own transaction around `SaveChanges` carries, in either writer mode; it is not something a
+`SaveChangesInterceptor` can special-case away.
 
 ### Re-generating the trigger when the schema changes
 

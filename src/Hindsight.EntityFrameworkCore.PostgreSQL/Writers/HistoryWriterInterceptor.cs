@@ -277,6 +277,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         catch
         {
             state.OwnedTransaction?.Rollback();
+            RestoreEntityStates(state.Rows);
             throw;
         }
         finally
@@ -305,6 +306,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
                 await transaction.RollbackAsync(cancellationToken);
             }
 
+            RestoreEntityStates(state.Rows);
             throw;
         }
         finally
@@ -312,6 +314,27 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
             if (state.OwnedTransaction is { } transaction)
             {
                 await transaction.DisposeAsync();
+            }
+        }
+    }
+
+    // By the time this runs (SavedChanges/SavedChangesAsync), EF Core's own SaveChanges pipeline has
+    // already called ChangeTracker.AcceptAllChanges() — Added/Modified entries are now Unchanged, and
+    // Deleted entries are detached — strictly before this interceptor gets a chance to fail. If the
+    // history write (or the commit) then fails, both the data change and the history rows roll back
+    // together (the interceptor owns the transaction), but without this, the caller's tracked entities
+    // would silently read as saved: a caught exception followed by a plain retry would find nothing
+    // Added/Modified/Deleted left to save, and do nothing. Restoring the pre-accept EntityState here
+    // makes a retry actually retry. A Deleted row's Entry is deliberately null (PendingHistoryRow) —
+    // its entry was already detached by AcceptAllChanges and there is nothing left in the tracker to
+    // re-mark; that case is a documented caveat (docs/articles/limitations.md), not fixed here.
+    private static void RestoreEntityStates(IReadOnlyList<PendingHistoryRow> rows)
+    {
+        foreach (var row in rows)
+        {
+            if (row.Entry is { } entry)
+            {
+                entry.State = row.State;
             }
         }
     }

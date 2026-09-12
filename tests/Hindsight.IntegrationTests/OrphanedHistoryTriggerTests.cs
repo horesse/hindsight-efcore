@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -86,7 +87,12 @@ public sealed class OrphanedHistoryTriggerTests(PostgresFixture postgres)
     {
         protected override void OnConfiguring(DbContextOptionsBuilder options)
         {
-            options.UseNpgsql(connectionString).UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger));
+            // ManyServiceProvidersCreatedWarning suppressed: this test deliberately builds two distinct,
+            // short-lived contexts (with and without a snapshot) to diff their models — legitimate here,
+            // unlike the long-lived-production-singleton misuse this EF Core diagnostic exists to catch.
+            options.UseNpgsql(connectionString)
+                .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
+                .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
             if (snapshotModel is not null)
             {
                 options.ReplaceService<IMigrationsAssembly, StubMigrationsAssembly>();

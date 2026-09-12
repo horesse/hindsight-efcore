@@ -12,13 +12,11 @@ public sealed class HistoryEntityTypeConventionTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal());
 
-        var history = model.FindEntityType("policies_history");
+        var history = model.HistoryEntityType(typeof(Policy));
 
-        Assert.NotNull(history);
         Assert.Equal("policies_history", history.GetTableName());
         Assert.True(history.IsPropertyBag);
         Assert.True(history[HindsightAnnotationNames.IsHistoryTable] is true);
-        Assert.Equal("policies_history", model.FindEntityType(typeof(Policy))![HindsightAnnotationNames.HistoryEntityType]);
     }
 
     [Fact]
@@ -26,7 +24,7 @@ public sealed class HistoryEntityTypeConventionTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal(t => t.Exclude(p => p.UpdatedAt)));
 
-        var columns = model.FindEntityType("policies_history")!.GetProperties()
+        var columns = model.HistoryEntityType(typeof(Policy)).GetProperties()
             .Select(p => p.GetColumnName())
             .ToList();
 
@@ -40,7 +38,7 @@ public sealed class HistoryEntityTypeConventionTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal());
 
-        var columns = model.FindEntityType("policies_history")!.GetProperties()
+        var columns = model.HistoryEntityType(typeof(Policy)).GetProperties()
             .ToDictionary(p => p.GetColumnName()!, p => p);
 
         Assert.False(columns["valid_from"].IsNullable);
@@ -58,7 +56,7 @@ public sealed class HistoryEntityTypeConventionTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal());
 
-        var history = model.FindEntityType("policies_history")!;
+        var history = model.HistoryEntityType(typeof(Policy));
         var key = history.FindPrimaryKey();
 
         Assert.NotNull(key);
@@ -71,7 +69,7 @@ public sealed class HistoryEntityTypeConventionTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal());
 
-        var index = Assert.Single(model.FindEntityType("policies_history")!.GetIndexes());
+        var index = Assert.Single(model.HistoryEntityType(typeof(Policy)).GetIndexes());
 
         Assert.Equal(["Id", "valid_from"], index.Properties.Select(p => p.GetColumnName()));
         Assert.Equal([false, true], index.IsDescending!);
@@ -83,7 +81,7 @@ public sealed class HistoryEntityTypeConventionTests
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal(t => t
             .UseHistoryTable("policy_versions", schema: "audit")));
 
-        var history = model.FindEntityType("policy_versions")!;
+        var history = model.HistoryEntityType(typeof(Policy));
 
         Assert.Equal("policy_versions", history.GetTableName());
         Assert.Equal("audit", history.GetSchema());
@@ -202,7 +200,7 @@ public sealed class HistoryEntityTypeConventionTests
             e.IsTemporal(t => t.Exclude(p => p.TenantId));
         }));
 
-        var columns = model.FindEntityType("composite_key_policies_history")!.GetProperties()
+        var columns = model.HistoryEntityType(typeof(CompositeKeyPolicy)).GetProperties()
             .Select(p => p.GetColumnName())
             .ToList();
 
@@ -232,7 +230,7 @@ public sealed class HistoryEntityTypeConventionTests
             entity.IsTemporal(t => t.Exclude(p => p.Value));
         });
 
-        var columns = model.FindEntityType("reserved_column_entities_history")!.GetProperties()
+        var columns = model.HistoryEntityType(typeof(ReservedColumnEntity)).GetProperties()
             .Select(p => p.GetColumnName())
             .ToList();
 
@@ -256,7 +254,7 @@ public sealed class HistoryEntityTypeConventionTests
             e.IsTemporal();
         }));
 
-        Assert.NotNull(model.FindEntityType(mainTable + "_history"));
+        Assert.NotNull(model.HistoryEntityType(typeof(LongNameEntity)));
     }
 
     [Fact]
@@ -291,7 +289,7 @@ public sealed class HistoryEntityTypeConventionTests
             e.IsTemporal(t => t.UseHistoryTable("short_history"));
         }));
 
-        Assert.NotNull(model.FindEntityType("short_history"));
+        Assert.Equal("short_history", model.HistoryEntityType(typeof(LongNameEntity)).GetTableName());
     }
 
     [Fact]

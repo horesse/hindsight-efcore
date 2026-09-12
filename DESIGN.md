@@ -550,7 +550,90 @@ modes — `pg_index`/`pg_am` confirm the `gist` access method and `pg_indexes` c
 and `HistoryTableRetentionOnDetemporalizeTests` (the index survives the same de-temporalize migration
 D6 already covers for the table itself).
 
-## D15. Change-context trust model, and a proposed `session_user` audit column — open question
+## D15. History entity identity is independent of its table name — resolved 2026-09-12
+
+A rename of a temporal entity's main table (`ToTable(...)`) or its history table
+(`UseHistoryTable(...)`) must show up in the migration as a `RenameTableOperation`, so history is
+renamed in place and keeps growing under the new name, instead of being dropped-and-recreated under a
+fresh identity.
+
+**The bug.** `HistoryEntityTypeConvention.BuildHistoryEntityType` used the history table's own
+(possibly derived) name as *both* the model identity of its `SharedTypeEntity` and its mapped table
+name (`modelBuilder.SharedTypeEntity(historyTableName, ...)`, then `.ToTable(historyTableName, ...)`).
+The differ pairs shared-type entities by identity, not by mapped table name, so any change to that
+name also changed the identity — the differ could never see "the same entity, renamed", only an
+unrelated new entity appearing. D6's own retention mechanism then kept the *old* identity alive too
+(correctly recognizing it as "no longer rebuilt this pass", the same signal a de-temporalized entity
+gives it), so nothing was ever destroyed — but old and new history ended up split across two
+disconnected tables, invisible to each other for `AsOf` / `AllVersions` / `History<T>`. Verified against
+real PostgreSQL before any fix: renaming a temporal entity's `ToTable(...)` produced exactly this split,
+with no crash and no data loss, just silently divergent history. (The originally suspected crash —
+`INSERT INTO <stale name>` failing because a `RenameTableOperation` slipped past
+`HindsightMigrationsSqlGenerator.Rewrite` unhandled — never occurs: a history table's identity coupling
+to its own name meant the differ never emitted a `RenameTableOperation` for it in the first place, only
+for the main table, and PostgreSQL's `ALTER TABLE ... RENAME` already carries a trigger to the renamed
+table on its own, since a trigger is tracked by the relation's OID, not its name.)
+
+**Fix.** The identity is now `<source>#History` — styled after EF's own generated names for entities
+that don't come from a CLR type directly (e.g. `Blog.Owner#Owner`; `#` cannot appear in a CLR type
+name, so this can't collide with a real entity) — stable across any later `ToTable` / `UseHistoryTable`
+call. `ToTable(...)` on the history builder still points that stable identity at whatever the current
+table-name computation produces, so a rename of either table is now a genuine, single-entity
+`RenameTableOperation`.
+
+**Backward compatibility (grandfathering).** Every entity already temporal before this fix has its
+history identity equal to its own table name, as recorded in the last migration's `ModelSnapshot`.
+Switching everyone unconditionally to the new `#History` scheme would make the differ see their live
+history table disappear (wrong identity) and an unrelated one with the new identity appear —
+`DropTable` + `CreateTable` for existing production history, on the very next migration after
+upgrading Hindsight, with no rename involved at all (golden rule 3). Instead,
+`HistoryEntityTypeConvention` reads the previous `IMigrationsAssembly.ModelSnapshot` (same mechanism D6
+already uses for orphaning) and, when the source entity already has a recorded
+`Hindsight:HistoryEntityType` identity there, reuses that identity forever — the same "propagate
+forward" trick D6 uses for `Orphaned`. Only a source becoming temporal for the first time after this
+fix gets the new `#History` scheme. A deployment that never renames anything sees no migration diff
+from upgrading Hindsight alone; one that does rename later still gets a true `RenameTableOperation`,
+because its grandfathered identity is stable too. (The snapshot is now resolved once per model-build
+pass, shared by history-entity construction, orphaned-column restoration and orphaned-table
+restoration, instead of once per call site as before — same guarded-by-`_resolvingSnapshotModel`
+re-entrancy behavior, just computed once.)
+
+**`HindsightMigrationsSqlGenerator.Rewrite` handles `RenameTableOperation`**, matched by whether the
+operation's *new* (schema, name) is a live trigger model's history table or main table:
+
+- **History table renamed:** the function's own name and its `INSERT INTO` target both embed the old
+  table name literally, baked in at the last `CreateFunction` — genuinely stale after the rename.
+  Recreating it is deferred until *after* every operation in the migration has been emitted, not done
+  in place right after the `RenameTableOperation`: when the same migration also renames the main table
+  (the default-suffix-naming case, since both names derive from the same source and rename together),
+  that rename's own operation can appear *later* in the list, and emitting `CREATE TRIGGER ... ON
+  <main table>` before that later rename has run would name a table that does not exist yet under that
+  name. Deferring to the end (the same place `needsRefresh` already replays column-driven
+  `CREATE OR REPLACE FUNCTION`s) guarantees every rename in the migration has already executed. Found
+  by writing the naive in-place version first and watching it fail against real PostgreSQL with
+  `relation "policies2" does not exist` — exactly the failure the fix now avoids.
+- **Main table renamed, history table's own name unchanged** (an explicit, unchanged
+  `UseHistoryTable(...)`): nothing is emitted. Verified against real PostgreSQL: a plain
+  `ALTER TABLE ... RENAME` carries the trigger to the renamed table automatically (a trigger is tracked
+  by the relation's OID, not its name), and the function body never names the main table at all (only
+  `NEW` / `OLD`), so a write through the renamed table succeeds with zero additional DDL.
+
+Covered by `TableRenameTriggerDdlTests` (Testcontainers: a main-table rename with default history
+naming — asserts both `RenameTableOperation`s, that no `CreateTable`/`DropTable` appears, and that
+history continues under the new name with no gap across the rename; a history-only rename via
+`UseHistoryTable`; a main-table rename with a fixed history name, asserting no function/trigger DDL is
+emitted at all) and the existing `HistoryEntityTypeConventionTests` / `OrphanedHistoryColumnTests` /
+`OrphanedHistoryTriggerTests` (updated to resolve a temporal entity's history entity type through its
+`Hindsight:HistoryEntityType` annotation — the same idiom production code already used — rather than
+assuming the identity equals the table name, which was only ever true by construction, not by
+contract).
+
+Revisit if: EF Core's differ starts pairing shared-type entities by something other than their `Name`;
+or the grandfathering lookup needs to survive the *source* entity itself being renamed (a different CLR
+type mapped onto the same table) — untested, and likely already broken the same way any EF entity
+identity change is.
+
+## D16. Change-context trust model, and a proposed `session_user` audit column — open question
 
 **Documented, 2026-09-12** (see `docs/articles/configuration.md` → Trust model): the change-context
 columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) are not tamper-resistant
@@ -649,11 +732,11 @@ Per CLAUDE.md rule 9, this stays an open question pending a maintainer decision 
 
 ## Open questions (resolve in the spike, then move up)
 
-- **D15**: add a `db_session_user` (or similarly named) column, populated by PostgreSQL's own
+- **D16**: add a `db_session_user` (or similarly named) column, populated by PostgreSQL's own
   `DEFAULT session_user`, as a defense-in-depth audit column alongside the existing application-supplied
   change-context columns? The mechanism is confirmed free (no interceptor/trigger code change); the
   decision pending is whether the feature is wanted at all, its exact column name, and whether
-  `current_user` should also be captured — see D15 for the full write-up.
+  `current_user` should also be captured — see D16 for the full write-up.
 
 ### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12
 

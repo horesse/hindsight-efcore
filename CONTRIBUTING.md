@@ -41,4 +41,12 @@ creates its own database on it. Not run in CI — it is manual, and the numbers 
 2. Create a GitHub Release with tag `vX.Y.Z` (or `vX.Y.Z-preview.N`). The `Release` workflow builds,
    tests, packs, waits for approval on the `nuget` environment and pushes to nuget.org via Trusted
    Publishing (OIDC, no stored API key). The tag is the version — MinVer reads it.
-3. Move `PublicAPI.Unshipped.txt` entries into `PublicAPI.Shipped.txt` in the next commit.
+3. **Immediately after the release publishes** (same day, before any other PR merges — do not defer
+   this): move every entry from `PublicAPI.Unshipped.txt` into `PublicAPI.Shipped.txt` and commit
+   directly to `master`. Until this happens, `PublicApiAnalyzers` cannot distinguish "new API for the
+   next release" from "API already in the hands of users," and for a stable (non-preview) release you
+   should also uncomment `PackageValidationBaselineVersion` in `src/Directory.Build.props` to point at
+   the version you just shipped — CI's `Pack` step then diffs every subsequent PR's public surface
+   against the real published package. CI fails the build if a tagged release ships with
+   `PublicAPI.Shipped.txt` unchanged (see `.github/workflows/ci.yml`), which is the backstop for
+   forgetting this step.

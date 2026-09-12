@@ -67,6 +67,11 @@ services.AddDbContext<AppDbContext>(o => o
         .UseHistoryWriter(HistoryWriter.Trigger)));          // or HistoryWriter.Interceptor
 ```
 
+> [!IMPORTANT]
+> `UseHindsight()` alone defaults to `HistoryWriter.Interceptor`. Call
+> `UseHistoryWriter(HistoryWriter.Trigger)` for production use unless you specifically cannot grant
+> `CREATE FUNCTION` / `CREATE TRIGGER` privileges — see [History writers](docs/articles/history-writers.md).
+
 ## Reading history
 
 ```csharp

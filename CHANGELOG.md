@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ### Added
 
+- `UseHindsight()` now validates that the context is configured with the Npgsql/PostgreSQL provider,
+  the only one Hindsight supports (see
+  [Limitations → Not in v1](docs/articles/limitations.md#not-in-v1)). The check runs the first time
+  the context is used, so `UseSqlite(...).UseHindsight()` (or any other provider) now fails fast with
+  a clear `InvalidOperationException` naming the provider found and the one required, instead of
+  surfacing a confusing DI-resolution or SQL-generation error later from `EnsureCreated`,
+  `dotnet ef migrations add`, or `SaveChanges`. No new public API.
 - Every history table now also gets a `gist (tstzrange(valid_from, valid_to))` period-range index
   (`ix_<history_table>_period`), created by the migration alongside the table in both
   `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `DESIGN.md` and
@@ -15,6 +22,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   on the entity's primary key forced a sequential scan of the whole history table for the
   period-overlap predicate. No new PostgreSQL extension is required — range types have a native GiST
   operator class in PostgreSQL core. No new public API.
+- A temporal entity whose history table name (default or `UseHistoryTable(...)`) would produce a
+  generated table, trigger function, trigger, or index name over 63 bytes now fails fast at model-build
+  time with a clear `InvalidOperationException`, instead of silently colliding with another entity's
+  identifier once PostgreSQL truncates it (`NAMEDATALEN - 1`) — a collision that fails loudly for a
+  table or index but is a *silent* history corruption for the trigger function, which PostgreSQL simply
+  replaces with no error. See [Model validation](docs/articles/configuration.md#model-validation). No
+  new public API.
 
 ### Fixed
 
@@ -25,6 +39,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   (`policies_history`, not the main table) with no error at all — confirmed against real PostgreSQL for
   all three markers. `ExecuteDelete` happened to be rejected by EF Core's own translator already, but
   Hindsight no longer relies on that accident either; all four now fail before any SQL is generated.
+- Both writers now cooperate with an ambient `System.Transactions.TransactionScope` instead of failing
+  inside it. Previously, `SaveChanges` called with no `context.Database.CurrentTransaction` open always
+  tried to start one of its own — including inside a caller's `TransactionScope` that had already
+  enlisted the connection — which EF Core rejected with
+  `InvalidOperationException: An ambient transaction has been detected...`, in both writer modes,
+  regardless of `EnableRetryOnFailure()`. Hindsight now checks for
+  `System.Transactions.Transaction.Current` first and, when one is present, opens no transaction of its
+  own: it opens the connection explicitly instead, so Npgsql enlists it in the ambient transaction, and
+  lets that transaction own commit/rollback for the data change and the history row(s) together, exactly
+  as a transaction Hindsight opens itself would. See
+  [Configuration → Ambient TransactionScope](docs/articles/configuration.md#ambient-transactionscope).
+  (A retrying execution strategy still cannot be combined with an ambient `TransactionScope` — that is
+  an independent, EF-Core-native restriction, unchanged by this fix; see
+  [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).)
+- `HistoryWriter.Interceptor` no longer writes a fabricated delete tombstone when an entity is removed
+  without being loaded first (`Remove(new Policy { Id = id })`, or `Attach` then `Remove`). It
+  previously trusted `EntityEntry.OriginalValues`, which for a never-loaded stub is just the CLR
+  defaults the caller's instance happened to hold, not the database's last known values — so the
+  tombstone silently carried garbage (all-default/null columns) instead of the entity's real
+  pre-delete state that `DESIGN.md` D5/D12 promise. `SaveChanges` now re-reads each deleted entity's
+  row from the database by primary key (`SELECT … FOR UPDATE`, in the same transaction as the delete)
+  before writing its tombstone; if no row matches, it throws `InvalidOperationException` instead of
+  writing an empty or fabricated one. One extra round trip per `SaveChanges` that deletes a temporal
+  entity — see [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs).
+  `HistoryWriter.Trigger` was never affected (it reads `OLD.*` from PostgreSQL directly).
 - Model validation: `IsTemporal()` now throws `InvalidOperationException` at model-build time when
   every property of a temporal entity's primary key is excluded from history with `Exclude(...)`,
   naming the entity. Previously this built a model that silently wrote no history row for any insert,
@@ -67,6 +106,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   restored the same way; this remains a documented caveat — see
   [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
   [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+- The save-back guard (DESIGN.md D7) now also catches an `AsOf` / `AllVersions` / `History<T>()`
+  result reached through the *second* argument of `Concat` / `Union` / `Except` / `Intersect` (for
+  example `otherQuery.Concat(db.Policies.AsOf(at))`), not just the first. The internal tagging walk
+  only ever followed the first argument of each method call in the chain, so a history-derived
+  instance surfacing through that shape was never marked, and re-attaching it with `Update()` +
+  `SaveChanges()` silently wrote the stale snapshot back as the current version instead of throwing.
+- `DbContext.WithReason("…")` now scopes its override to the specific `DbContext` instance it was
+  called on, in both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. It previously set
+  an `AsyncLocal` shared by the whole asynchronous control flow, so a `SaveChanges` on a *different*
+  `DbContext` running inside the same `using (dbA.WithReason(...))` block — a second, unrelated
+  context saved in the same method, the same request, or the same background job — silently picked up
+  `dbA`'s reason instead of its own (or `null`). The method signature is unchanged; nesting on the
+  same context still restores the previous value innermost-first on dispose.
+- A failure to resolve a `Scoped`-registered `IChangeContextProvider` from the application service
+  provider now throws a Hindsight-specific `InvalidOperationException` naming the provider type and
+  pointing at [Configuration → Pooled and factory-created
+  contexts](docs/articles/configuration.md#pooled-and-factory-created-contexts), with the original
+  DI-resolution error preserved as `InnerException`, instead of forwarding ASP.NET Core's generic
+  "Cannot resolve scoped service '...' from root provider." on its own. This surfaces under
+  `AddDbContextPool<T>()` / `AddDbContextFactory<T>()` with `ServiceProviderOptions.ValidateScopes` on
+  (ASP.NET Core's Development default); with it off (the common Production default), no exception is
+  thrown at all — the provider silently becomes a captive singleton instead, which the new
+  documentation section covers, since it cannot be reliably detected at runtime. The resolution logic
+  itself, previously duplicated between `HistoryWriter.Interceptor` and `HistoryWriter.Trigger`, is now
+  one internal `ChangeContextProviderResolver` shared by both. No public API change.
+
+### Changed
+
+- Documentation: the recommendation to use `HistoryWriter.Trigger` in production is now called out
+  right after the `UseHindsight(...)` configuration sample in `README.md`, and at the top of
+  [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
+  table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
+  writer when `UseHistoryWriter(...)` is never called.
+- `SaveChanges` no longer runs a redundant full `ChangeTracker.DetectChanges()` pass over every tracked
+  entity — not just temporal ones — when `HistoryRowPlan.BuildPending` (`HistoryWriter.Interceptor`) or
+  `HistoryTriggerContextInterceptor.HasTemporalChange` (`HistoryWriter.Trigger`) call
+  `ChangeTracker.Entries()`. `HistorySnapshotGuardInterceptor.Guard` already walks `Entries()` earlier
+  in the same `SaveChanges`, and with `AutoDetectChangesEnabled` on (the default) that call already ran
+  the one `DetectChanges()` pass needed; nothing mutates a tracked entity's properties between the two
+  calls. The second call now temporarily disables `AutoDetectChangesEnabled` around its own walk and
+  reuses `Guard`'s result instead of re-scanning. No behavior change for correctness — only measured on
+  a context that also tracks many untouched entities alongside the one that actually changed, where
+  managed allocations drop by roughly a third (about 32% at 10,000 tracked-but-unchanged entities, both
+  writer modes) — see [History writers → Tracked-but-unchanged entities](docs/articles/history-writers.md#tracked-but-unchanged-entities).
 
 ## [1.0.0] - 2026-09-11
 

@@ -44,7 +44,13 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
 - `Interceptor`: a `SaveChangesInterceptor`. In `SavingChanges` it snapshots the tracked temporal
   entities (state + versioned column values + which non-excluded properties changed) and, if the
   caller has no transaction open, starts one so the data change and the history rows commit together
-  (D3). In `SavedChanges` — after the batch, so store-generated keys are known — it re-reads current
+  (D3) — unless an ambient `System.Transactions.TransactionScope` is present, in which case starting a
+  second, EF-managed transaction is exactly what EF Core refuses; `HistoryWriterTransaction` detects
+  `System.Transactions.Transaction.Current` (public API) and opens the connection explicitly instead,
+  so Npgsql enlists it in the ambient transaction and every command from here on — the data write, the
+  history `INSERT`, the trigger writer's `set_config` push — rides that enlistment with no separate
+  `DbTransaction`; commit/rollback is then the ambient scope's job (`docs/articles/configuration.md` →
+  Ambient TransactionScope). In `SavedChanges` — after the batch, so store-generated keys are known — it re-reads current
   values for `Added`/`Modified` and writes the history rows on the same connection and transaction
   via parameterised SQL (`ISqlGenerationHelper` for identifiers, each history column's
   `RelationalTypeMapping` for values); it commits only the transaction it started itself. Cross-hook
@@ -101,6 +107,25 @@ through an `IChangeContextProvider`, registered with `UseHindsight(h => h.WithCh
 blocking on an async source there would be sync-over-async. The provider type is resolved per
 `SaveChanges` from `CoreOptionsExtension.ApplicationServiceProvider` (as `TimeProvider` is), falling
 back to a parameterless constructor; no EF-internal service provider, no reflection on the per-row path.
+This resolution is identical for both writers and lives once, in `ChangeContextProviderResolver`.
+
+**`AddDbContextPool<T>()` / `AddDbContextFactory<T>()` and a `Scoped` provider — investigated
+2026-09-12.** Confirmed empirically against EF Core 10.0.12: for these registration styles (pooled or
+not), every context instance shares one `DbContextOptions` built once, so `ApplicationServiceProvider`
+is whichever provider was active at that moment — normally the app's root container, never a request's
+scope, unlike plain `AddDbContext<T>()`. Resolving a `Scoped` `IChangeContextProvider` from it either
+throws (`ServiceProviderOptions.ValidateScopes` on — ASP.NET Core's Development default) or silently
+returns a captive singleton carrying the first request's captured state forever (`ValidateScopes` off —
+the common Production default). No registration pattern for the provider avoids this: the fixed point
+is the captured `ApplicationServiceProvider` itself, not the provider's lifetime. Not detectable at
+runtime either — `IServiceProvider.GetService` gives no public signal distinguishing a captive
+singleton from a legitimately-already-constructed scoped instance, and `HindsightOptionsExtension.Validate`
+runs before a service provider necessarily exists to inspect. Fixed the loud half only: the
+`InvalidOperationException` from that resolution call is now wrapped with a Hindsight-specific message
+naming the provider and the fix, instead of forwarding ASP.NET Core's generic one. The silent half is
+a hard constraint, documented instead — see `docs/articles/configuration.md` → Pooled and
+factory-created contexts for the safe pattern (a singleton provider reading per-request ambient state,
+e.g. `IHttpContextAccessor`, fresh inside `GetChangeContext`).
 
 The original design argument "a trigger can't know the user" is false — that's exactly what
 `set_config` is for. Both writers implemented 2026-09-11. Trigger is the recommended mode; Interceptor
@@ -142,6 +167,30 @@ so the collision is invisible at build time and only shows up later — as a dup
 identity-insert error from PostgreSQL in Interceptor mode, or as the entity's own value for that
 column being silently dropped forever with no error at all in Trigger mode, since the migrations
 generator excludes every fixed-name column from the trigger's versioned column list by name.
+
+PostgreSQL truncates any identifier over 63 bytes (`NAMEDATALEN - 1`, UTF-8 bytes not characters)
+silently, with no error — two identifiers that differ only after that point collide on the same
+physical object. Hindsight generates several from the main table name: the history table itself
+(`<table>_history`), the trigger function and trigger (`<history_table>_write`/`_trg`, Trigger mode
+only), and two indexes (`ix_<history_table>_version`, `ix_<history_table>_period`, D14, both modes).
+The tightest of these is the version index — `ix_` (3 bytes) + history table + `_version` (8 bytes),
+on top of the history table's own `_history` (8 bytes), is 19 bytes of fixed overhead — so a main
+table name of 44 ASCII bytes is the longest that keeps every generated identifier at or under 63
+bytes; 45 already puts the version index one byte over. `HistoryEntityTypeConvention
+.ValidateIdentifierLengths` computes every one of these identifiers for the entity's actual resolved
+history table name (a `UseHistoryTable(...)` override if there is one, not just the default
+derivation) and throws `InvalidOperationException` naming the offending identifier, its byte length,
+and the fix, at the same model-build point as the other checks in this section. Checked
+unconditionally rather than gated on `HistoryWriter.Trigger`, since a caller can switch writer modes
+later with `UseHistoryWriter(...)` without rebuilding the model. Confirmed against real PostgreSQL
+while investigating this bug: `CREATE TABLE`/`CREATE INDEX` on a collided name fails loudly ("relation
+... already exists") the first time the migration is applied, but `CREATE OR REPLACE FUNCTION` does
+not — it silently replaces the losing entity's trigger function body with the winning one's, and the
+losing entity's own trigger (unaffected, since triggers are scoped per table, not global) goes on
+calling the wrong function on every future write, corrupting that entity's history with no error
+anywhere. `dotnet ef migrations add` itself catches none of this — EF Core has no concept of
+PostgreSQL's identifier limit — so the collision would otherwise first surface as either of the above,
+against a real database, arbitrarily long after the entities were defined.
 
 Intervals are half-open `[valid_from, valid_to)`, everything is `timestamptz` in UTC.
 
@@ -275,6 +324,11 @@ Package `Hindsight.EntityFrameworkCore.PostgreSQL`, namespace `Hindsight`. `Chro
 MinVer from git tags. A GitHub Release with tag `vX.Y.Z[-preview.N]` is the only path to nuget.org;
 publishing uses nuget.org Trusted Publishing (OIDC) behind a reviewed `nuget` environment — no API key is stored.
 Package validation (`EnablePackageValidation`) and PublicAPI analyzers guard the public surface.
+
+**2.0 milestone tracking.** Whether `HistoryWriter.Trigger` becomes the default writer (see Open
+questions) is a decision reserved for a deliberate 2.0 release — it needs a major version bump and its
+own upgrade-guide migration note, not a patch. A GitHub milestone for 2.0 should carry this question so
+it isn't lost between now and whenever that release is actually cut.
 
 ## D12. `AsOf` / `AllVersions` translate by query-root replacement — resolved by spike, 2026-09-10
 
@@ -498,4 +552,43 @@ D6 already covers for the table itself).
 
 ## Open questions (resolve in the spike, then move up)
 
-_None open._
+### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12
+
+Not decided. `HistoryWriter.Interceptor` is `= 0` and therefore what `UseHindsight()` gives a caller
+who never calls `UseHistoryWriter(...)` — see `Infrastructure/HindsightOptionsExtension.cs`. D3
+already recommends `Trigger` in production and README/`docs/articles/history-writers.md` say so too,
+but the silent default is still the structurally weaker writer.
+
+**The case for switching.** `Trigger` has no known correctness gap versus `Interceptor`: it is immune
+to the clock-skew and backwards-clock exposure D3 documents for `Interceptor` (timestamps come from
+`now()` inside the writing transaction, not an application `TimeProvider` that can disagree across
+instances), and it sees `ExecuteUpdate` / `ExecuteDelete` / raw SQL / other-process writes (D4), which
+`Interceptor` structurally cannot. A new user who never reads the writer comparison table currently
+gets the weaker guarantees by default; that is exactly the kind of trap rule 2 exists to avoid at the
+API level, not just in prose.
+
+**The case for keeping `Interceptor` as the default.** D3 already names `Interceptor`'s one legitimate
+remaining use case: "environments where trigger creation is forbidden by policy" — some managed
+PostgreSQL setups and some organizations' database-permission policies do not grant an application
+role `CREATE FUNCTION` / `CREATE TRIGGER`, only `SELECT`/`INSERT`/`UPDATE`/`DELETE` on specific tables.
+For those callers, `Trigger` is not just non-default, it is unusable, and a default flip would turn
+`UseHindsight()` alone into a runtime failure on `dotnet ef migrations add` (a `CREATE FUNCTION` the
+role can't execute) for anyone in that position who upgrades without reading the changelog.
+
+**The migration path this needs, if we do it.** Flipping the default is a breaking behavior change
+(D11: MinVer semver from git tags), and it is not just a code default — an existing 1.x user who
+upgrades to 2.0 with no explicit `UseHistoryWriter(...)` call would silently: (a) start getting
+`now()` timestamps instead of `TimeProvider` ones (breaks any test or code that reasoned about
+injected time), and (b) get trigger DDL — `CREATE FUNCTION` / `CREATE TRIGGER` — injected into their
+*next* `dotnet ef migrations add`, which they did not ask for and which may fail outright if their
+migration role lacks the privilege. A bare "default changed" line in `CHANGELOG.md` is not enough.
+The 2.0 upgrade guide needs its own migration-path section spelling out, roughly: "2.0 changes the
+default `HistoryWriter` from `Interceptor` to `Trigger`. If you never called `UseHistoryWriter(...)`
+explicitly, upgrading will change your history's timestamp source from `TimeProvider` to `now()` and
+add trigger DDL to your next migration. If you need to defer this — including if your database role
+cannot create functions or triggers — pin `UseHistoryWriter(HistoryWriter.Interceptor)` explicitly
+before upgrading, which keeps 1.x behavior unchanged."
+
+**What would make us revisit/resolve this:** a decision, before a 2.0 milestone is cut, on whether the
+default flips (see D11 — a 2.0 milestone should track this so it isn't decided by drive-by PR); if it
+does, the upgrade guide above ships in the same release, not after.

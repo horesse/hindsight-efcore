@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Verify.XunitV3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
   </ItemGroup>
 
   <ItemGroup>

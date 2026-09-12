@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Changed
+
+- Documented the change-context trust model: `docs/articles/configuration.md` and
+  `docs/articles/history-writers.md` now state plainly that `changed_by` / `changed_by_name` /
+  `correlation_id` / `reason` / `extra` are application-asserted, not database-guaranteed — under
+  `HistoryWriter.Trigger` they round-trip through an unauthenticated `set_config`/`current_setting`
+  session setting that anything with an ordinary database connection can also set. This was always the
+  design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
+  comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D15 for the
+  open question this raised about an additional, database-guaranteed `session_user` column.
+
 ### Added
 
 - `UseHindsight()` now validates that the context is configured with the Npgsql/PostgreSQL provider,

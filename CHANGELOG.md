@@ -105,6 +105,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   context saved in the same method, the same request, or the same background job — silently picked up
   `dbA`'s reason instead of its own (or `null`). The method signature is unchanged; nesting on the
   same context still restores the previous value innermost-first on dispose.
+- A failure to resolve a `Scoped`-registered `IChangeContextProvider` from the application service
+  provider now throws a Hindsight-specific `InvalidOperationException` naming the provider type and
+  pointing at [Configuration → Pooled and factory-created
+  contexts](docs/articles/configuration.md#pooled-and-factory-created-contexts), with the original
+  DI-resolution error preserved as `InnerException`, instead of forwarding ASP.NET Core's generic
+  "Cannot resolve scoped service '...' from root provider." on its own. This surfaces under
+  `AddDbContextPool<T>()` / `AddDbContextFactory<T>()` with `ServiceProviderOptions.ValidateScopes` on
+  (ASP.NET Core's Development default); with it off (the common Production default), no exception is
+  thrown at all — the provider silently becomes a captive singleton instead, which the new
+  documentation section covers, since it cannot be reliably detected at runtime. The resolution logic
+  itself, previously duplicated between `HistoryWriter.Interceptor` and `HistoryWriter.Trigger`, is now
+  one internal `ChangeContextProviderResolver` shared by both. No public API change.
 
 ### Changed
 

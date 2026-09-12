@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Data.Common;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -41,8 +40,6 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
     // Keyed by the context instance, like HistoryWriterInterceptor: at most one live entry per context,
     // removed in the terminal hook. Never a field — the interceptor is shared between contexts.
     private readonly ConditionalWeakTable<DbContext, OwnedTransaction> _pending = new();
-
-    private static readonly ConcurrentDictionary<Type, Func<object>> _providerActivators = new();
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -218,7 +215,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             return null;
         }
 
-        var provider = ResolveProvider(context);
+        var provider = ChangeContextProviderResolver.Resolve(context);
         var scopedReason = ChangeReasonScope.CurrentFor(context);
         if (provider is null && scopedReason is null)
         {
@@ -295,42 +292,6 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         }
 
         command.CommandText = "SELECT " + string.Join(", ", calls);
-    }
-
-    private static IChangeContextProvider? ResolveProvider(DbContext context)
-    {
-        var providerType = context.GetService<IDbContextOptions>()
-            .FindExtension<HindsightOptionsExtension>()
-            ?.ChangeContextProviderType;
-        if (providerType is null)
-        {
-            return null;
-        }
-
-        var applicationServiceProvider = context.GetService<IDbContextOptions>()
-            .FindExtension<CoreOptionsExtension>()
-            ?.ApplicationServiceProvider;
-
-        if (applicationServiceProvider?.GetService(providerType) is IChangeContextProvider fromServices)
-        {
-            return fromServices;
-        }
-
-        var activator = _providerActivators.GetOrAdd(providerType, CreateActivator);
-        return (IChangeContextProvider)activator();
-    }
-
-    private static Func<object> CreateActivator(Type providerType)
-    {
-        if (providerType.GetConstructor(Type.EmptyTypes) is null)
-        {
-            throw new InvalidOperationException(
-                $"Change context provider '{providerType.FullName}' is not registered on the "
-                + "application service provider and has no parameterless constructor. Register it with "
-                + "the DbContext's application service provider, or give it a parameterless constructor.");
-        }
-
-        return () => Activator.CreateInstance(providerType)!;
     }
 
     private sealed record OwnedTransaction(HistoryWriterTransaction.Outcome TransactionOutcome);

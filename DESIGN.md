@@ -123,10 +123,9 @@ singleton from a legitimately-already-constructed scoped instance, and `Hindsigh
 runs before a service provider necessarily exists to inspect. Fixed the loud half only: the
 `InvalidOperationException` from that resolution call is now wrapped with a Hindsight-specific message
 naming the provider and the fix, instead of forwarding ASP.NET Core's generic one. The silent half is
-a hard constraint, documented instead — see [Configuration → Pooled and factory-created
-contexts](docs/articles/configuration.md#pooled-and-factory-created-contexts) for the safe pattern (a
-singleton provider reading per-request ambient state, e.g. `IHttpContextAccessor`, fresh inside
-`GetChangeContext`).
+a hard constraint, documented instead — see `docs/articles/configuration.md` → Pooled and
+factory-created contexts for the safe pattern (a singleton provider reading per-request ambient state,
+e.g. `IHttpContextAccessor`, fresh inside `GetChangeContext`).
 
 The original design argument "a trigger can't know the user" is false — that's exactly what
 `set_config` is for. Both writers implemented 2026-09-11. Trigger is the recommended mode; Interceptor

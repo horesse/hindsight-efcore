@@ -61,6 +61,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
   [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
 
+### Changed
+
+- Documentation: the recommendation to use `HistoryWriter.Trigger` in production is now called out
+  right after the `UseHindsight(...)` configuration sample in `README.md`, and at the top of
+  [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
+  table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
+  writer when `UseHistoryWriter(...)` is never called.
+
 ## [1.0.0] - 2026-09-11
 
 ### Added

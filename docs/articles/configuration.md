@@ -202,6 +202,60 @@ using (db.WithReason("Backdated correction after audit"))
 The scope is tied to `db` specifically — a `SaveChanges` on a different `DbContext` instance, even
 one running inside the same `using` block, is never affected.
 
+## Pooled and factory-created contexts
+
+`AddDbContextPool<T>()`, `AddDbContextFactory<T>()` and `AddPooledDbContextFactory<T>()` all build one
+`DbContextOptions` instance once, when the pool or factory is configured, and every pooled or
+factory-created `DbContext` instance shares it. `CoreOptionsExtension.ApplicationServiceProvider` —
+the provider Hindsight resolves `IChangeContextProvider` from — is baked into that shared instance at
+the moment it is built, which is normally the application's **root** container, not any request's
+scope. Confirmed against EF Core 10.0.12: it is identical across every simulated request that rents
+from the same pool or factory, unlike plain `AddDbContext<T>()`, where each request gets its own
+`DbContextOptions` built from that request's own scope.
+
+A `HttpChangeContextProvider` registered `Scoped`, exactly as in the example above, cannot be resolved
+correctly from a captured root provider:
+
+- With `ServiceProviderOptions.ValidateScopes` on — ASP.NET Core's Development default — every
+  `SaveChanges` that writes a temporal entity throws immediately:
+  `InvalidOperationException: Failed to resolve change context provider '...'. ... Cannot resolve
+  scoped service '...' from root provider.` Loud, but only because Development happens to validate
+  this; nothing stops the same misconfiguration in Production.
+- With `ValidateScopes` off — the common Production default unless explicitly configured — the
+  container silently hands back a **captive singleton**: the first request's `HttpChangeContextProvider`
+  instance, with whatever it captured from `IHttpContextAccessor` at construction, reused for every
+  later `SaveChanges` regardless of which request is actually running. Every history row after the
+  first is silently stamped with the wrong user.
+
+There is no registration pattern for the provider itself that avoids this — the fixed point is
+`ApplicationServiceProvider`, not the provider's own lifetime. Hindsight resolves it fresh from the
+current `DbContext` instance on every `SaveChanges`, but every pooled/factory-created instance points
+at the same pinned, captured provider regardless. The fix is to register the provider `Singleton` and
+read per-request state fresh inside `GetChangeContext`, rather than capturing a scoped dependency in
+its constructor. `IHttpContextAccessor` is itself already a singleton, backed by `AsyncLocal`, so the
+sample provider above needs no change beyond its registration:
+
+```csharp
+services.AddHttpContextAccessor();
+services.AddSingleton<HttpChangeContextProvider>(); // not AddScoped
+
+services.AddDbContextPool<AppDbContext>(o => o
+    .UseNpgsql(connectionString)
+    .UseHindsight(h => h.WithChangeContext<HttpChangeContextProvider>()));
+```
+
+`HttpChangeContextProvider` above already only reads `accessor.HttpContext` inside `GetChangeContext`
+— nothing is captured at construction — so making it a singleton is enough; no other code changes.
+The same applies to `AddDbContextFactory<T>()` and `AddPooledDbContextFactory<T>()`.
+
+This is a hard constraint, not something Hindsight can detect and correct at runtime: from inside the
+resolution call there is no public API that distinguishes "a captured root provider silently handing
+back a captive singleton" from "a correctly scoped provider that happens to already exist" — both look
+identical to `IServiceProvider.GetService`. `HindsightOptionsExtension.Validate` cannot help either: it
+runs before any service provider necessarily exists to inspect. The only case Hindsight can improve is
+the loud one — `ValidateScopes` on — where the thrown `InvalidOperationException` names the provider
+and this section instead of forwarding ASP.NET Core's generic, Hindsight-unaware message on its own.
+
 ## Model validation
 
 Hindsight validates the model at build time — the same point `dotnet ef migrations add` builds it at

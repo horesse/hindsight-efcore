@@ -107,6 +107,26 @@ through an `IChangeContextProvider`, registered with `UseHindsight(h => h.WithCh
 blocking on an async source there would be sync-over-async. The provider type is resolved per
 `SaveChanges` from `CoreOptionsExtension.ApplicationServiceProvider` (as `TimeProvider` is), falling
 back to a parameterless constructor; no EF-internal service provider, no reflection on the per-row path.
+This resolution is identical for both writers and lives once, in `ChangeContextProviderResolver`.
+
+**`AddDbContextPool<T>()` / `AddDbContextFactory<T>()` and a `Scoped` provider — investigated
+2026-09-12.** Confirmed empirically against EF Core 10.0.12: for these registration styles (pooled or
+not), every context instance shares one `DbContextOptions` built once, so `ApplicationServiceProvider`
+is whichever provider was active at that moment — normally the app's root container, never a request's
+scope, unlike plain `AddDbContext<T>()`. Resolving a `Scoped` `IChangeContextProvider` from it either
+throws (`ServiceProviderOptions.ValidateScopes` on — ASP.NET Core's Development default) or silently
+returns a captive singleton carrying the first request's captured state forever (`ValidateScopes` off —
+the common Production default). No registration pattern for the provider avoids this: the fixed point
+is the captured `ApplicationServiceProvider` itself, not the provider's lifetime. Not detectable at
+runtime either — `IServiceProvider.GetService` gives no public signal distinguishing a captive
+singleton from a legitimately-already-constructed scoped instance, and `HindsightOptionsExtension.Validate`
+runs before a service provider necessarily exists to inspect. Fixed the loud half only: the
+`InvalidOperationException` from that resolution call is now wrapped with a Hindsight-specific message
+naming the provider and the fix, instead of forwarding ASP.NET Core's generic one. The silent half is
+a hard constraint, documented instead — see [Configuration → Pooled and factory-created
+contexts](docs/articles/configuration.md#pooled-and-factory-created-contexts) for the safe pattern (a
+singleton provider reading per-request ambient state, e.g. `IHttpContextAccessor`, fresh inside
+`GetChangeContext`).
 
 The original design argument "a trigger can't know the user" is false — that's exactly what
 `set_config` is for. Both writers implemented 2026-09-11. Trigger is the recommended mode; Interceptor

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Hindsight.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -23,11 +22,6 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // context, removed in SavedChanges / SaveChangesFailed. Deliberately not a plain field — the
     // interceptor is shared between contexts and a field would race (CLAUDE.md rule 5).
     private readonly ConditionalWeakTable<DbContext, SaveState> _pending = new();
-
-    // Parameterless-constructor factories for change context providers that are not registered in the
-    // application service provider. Compiled once per type, not per SaveChanges (library-code rule:
-    // no reflection on the hot path).
-    private static readonly ConcurrentDictionary<Type, Func<object>> _providerActivators = new();
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -211,7 +205,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // set with DbContext.WithReason(...) overrides whatever the provider put in ChangeContext.Reason.
     private static ChangeContext CaptureChangeContext(DbContext context)
     {
-        var changeContext = ResolveChangeContextProvider(context)?.GetChangeContext(context)
+        var changeContext = ChangeContextProviderResolver.Resolve(context)?.GetChangeContext(context)
             ?? ChangeContext.Empty;
 
         if (ChangeReasonScope.CurrentFor(context) is { } scopedReason)
@@ -220,42 +214,6 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
         }
 
         return changeContext;
-    }
-
-    private static IChangeContextProvider? ResolveChangeContextProvider(DbContext context)
-    {
-        var providerType = context.GetService<IDbContextOptions>()
-            .FindExtension<HindsightOptionsExtension>()
-            ?.ChangeContextProviderType;
-        if (providerType is null)
-        {
-            return null;
-        }
-
-        var applicationServiceProvider = context.GetService<IDbContextOptions>()
-            .FindExtension<CoreOptionsExtension>()
-            ?.ApplicationServiceProvider;
-
-        if (applicationServiceProvider?.GetService(providerType) is IChangeContextProvider fromServices)
-        {
-            return fromServices;
-        }
-
-        var activator = _providerActivators.GetOrAdd(providerType, CreateActivator);
-        return (IChangeContextProvider)activator();
-    }
-
-    private static Func<object> CreateActivator(Type providerType)
-    {
-        if (providerType.GetConstructor(Type.EmptyTypes) is null)
-        {
-            throw new InvalidOperationException(
-                $"Change context provider '{providerType.FullName}' is not registered on the "
-                + "application service provider and has no parameterless constructor. Register it with "
-                + "the DbContext's application service provider, or give it a parameterless constructor.");
-        }
-
-        return () => Activator.CreateInstance(providerType)!;
     }
 
     private static void Complete(DbContext context, SaveState state)

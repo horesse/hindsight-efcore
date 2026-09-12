@@ -42,6 +42,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   otherwise open its own transaction (no ambient transaction from the caller). Wrap the call in
   `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction to use retry
   with Hindsight. See [Configuration → EnableRetryOnFailure and transactions](docs/articles/configuration.md#enableretryonfailure-and-transactions).
+- Renaming a temporal entity's main table (`ToTable(...)`) or its history table
+  (`UseHistoryTable(...)`) now produces a real `RenameTableOperation` and history keeps growing under
+  the new name, instead of the old history table being silently kept alive under its old name (with no
+  more writes going to it) while an unrelated new one was created under the new name — safe (nothing
+  was ever dropped) but silently split, with the pre-rename data no longer reachable from `AsOf` /
+  `AllVersions` / `History<T>`. Under `HistoryWriter.Trigger`, a rename of the history table itself now
+  also regenerates its function and trigger under the new name; a rename of only the main table needs
+  no DDL of its own (PostgreSQL already carries the trigger to the renamed table). See
+  [Schema evolution → Renaming the main table or the history table](docs/articles/schema-evolution.md#renaming-the-main-table-or-the-history-table)
+  and DESIGN.md D15. Existing deployments are unaffected unless they actually rename something: no new
+  public API, and upgrading Hindsight alone produces no migration diff.
 
 ## [1.0.0] - 2026-09-11
 

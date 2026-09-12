@@ -29,7 +29,7 @@ public sealed class OrphanedHistoryColumnTests
             b => b.Entity<Policy>().IsTemporal(),
             previousSnapshot: previous);
 
-        var legacy = current.FindEntityType("policies_history")!.FindProperty("LegacyNote");
+        var legacy = current.HistoryEntityType(typeof(Policy)).FindProperty("LegacyNote");
 
         Assert.NotNull(legacy);
         Assert.True(legacy.IsNullable);
@@ -49,7 +49,7 @@ public sealed class OrphanedHistoryColumnTests
             b => b.Entity<Policy>().IsTemporal(),
             previousSnapshot: previous);
 
-        var payload = current.FindEntityType("policies_history")!.FindProperty("Payload");
+        var payload = current.HistoryEntityType(typeof(Policy)).FindProperty("Payload");
 
         Assert.NotNull(payload);
         Assert.Equal("jsonb", payload.GetColumnType());
@@ -78,7 +78,7 @@ public sealed class OrphanedHistoryColumnTests
             b => b.Entity<Policy>().IsTemporal(),
             previousSnapshot: v2);
 
-        var history = v3.FindEntityType("policies_history")!;
+        var history = v3.HistoryEntityType(typeof(Policy));
         Assert.True(history.FindProperty("First")![HindsightAnnotationNames.Orphaned] is true);
         Assert.True(history.FindProperty("Second")![HindsightAnnotationNames.Orphaned] is true);
     }
@@ -88,7 +88,7 @@ public sealed class OrphanedHistoryColumnTests
     {
         var model = BuildModel(b => b.Entity<Policy>().IsTemporal(), previousSnapshot: null);
 
-        var orphans = model.FindEntityType("policies_history")!.GetProperties()
+        var orphans = model.HistoryEntityType(typeof(Policy)).GetProperties()
             .Where(p => p[HindsightAnnotationNames.Orphaned] is true);
 
         Assert.Empty(orphans);
@@ -100,7 +100,7 @@ public sealed class OrphanedHistoryColumnTests
         var previous = BuildModel(b => b.Entity<Policy>().IsTemporal());
         var current = BuildModel(b => b.Entity<Policy>().IsTemporal(), previousSnapshot: previous);
 
-        var orphans = current.FindEntityType("policies_history")!.GetProperties()
+        var orphans = current.HistoryEntityType(typeof(Policy)).GetProperties()
             .Where(p => p[HindsightAnnotationNames.Orphaned] is true);
 
         Assert.Empty(orphans);

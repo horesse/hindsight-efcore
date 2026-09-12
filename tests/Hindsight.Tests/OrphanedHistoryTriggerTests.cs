@@ -20,9 +20,10 @@ public sealed class OrphanedHistoryTriggerTests
     public void Detemporalizing_an_entity_marks_its_history_table_trigger_pending_for_drop()
     {
         var v1 = BuildModel(b => b.Entity<Policy>().IsTemporal());
+        var historyIdentity = v1.HistoryEntityType(typeof(Policy)).Name;
         var v2 = BuildModel(b => { }, previousSnapshot: v1);
 
-        var history = v2.FindEntityType("policies_history")!;
+        var history = v2.FindEntityType(historyIdentity)!;
 
         Assert.True(history[HindsightAnnotationNames.Orphaned] is true);
         Assert.True(history[HindsightAnnotationNames.OrphanedTriggerPending] is true);
@@ -32,10 +33,11 @@ public sealed class OrphanedHistoryTriggerTests
     public void The_pending_flag_is_not_set_again_on_a_later_migration()
     {
         var v1 = BuildModel(b => b.Entity<Policy>().IsTemporal());
+        var historyIdentity = v1.HistoryEntityType(typeof(Policy)).Name;
         var v2 = BuildModel(b => { }, previousSnapshot: v1);
         var v3 = BuildModel(b => { }, previousSnapshot: v2);
 
-        var history = v3.FindEntityType("policies_history")!;
+        var history = v3.FindEntityType(historyIdentity)!;
 
         Assert.True(history[HindsightAnnotationNames.Orphaned] is true);
         Assert.True(history[HindsightAnnotationNames.OrphanedTriggerPending] is not true);
@@ -47,7 +49,7 @@ public sealed class OrphanedHistoryTriggerTests
         var v1 = BuildModel(b => b.Entity<Policy>().IsTemporal());
         var v2 = BuildModel(b => b.Entity<Policy>().IsTemporal(), previousSnapshot: v1);
 
-        var history = v2.FindEntityType("policies_history")!;
+        var history = v2.HistoryEntityType(typeof(Policy));
 
         Assert.True(history[HindsightAnnotationNames.Orphaned] is not true);
         Assert.True(history[HindsightAnnotationNames.OrphanedTriggerPending] is not true);

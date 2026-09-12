@@ -76,6 +76,34 @@ EF Core's rename detection applies to the main table. In the history table a ren
 mechanism as removing a column). This is deliberate — a rename in history is not distinguishable from
 a semantic change, and guessing wrong silently corrupts old versions.
 
+## Renaming the main table or the history table
+
+Call `ToTable(...)` on the entity, or `UseHistoryTable(...)` inside `IsTemporal(...)`, and the affected
+table is renamed in place: the migration emits a `RenameTableOperation`, not a drop-and-recreate.
+History keeps growing under the new name — nothing is split or lost, and no data reachable from
+`AsOf` / `AllVersions` / `History<T>` before the rename becomes unreachable after it.
+
+- **Renaming the main table**, history table left at its default (derived) name: since the default
+  name is `<main table>_history`, both tables rename together — two `RenameTableOperation`s in one
+  migration. Under `HistoryWriter.Trigger`, the function and trigger are dropped under the old history
+  table's name and recreated under the new one, after every rename in the migration has already run.
+- **Renaming the main table**, history table at an explicit `UseHistoryTable(...)` name that stays the
+  same: only the main table's `RenameTableOperation` appears, and nothing needs to change about the
+  trigger. PostgreSQL tracks a trigger by the table's OID, so a plain `ALTER TABLE ... RENAME` carries
+  it along automatically, and the trigger function's body never names the main table (only
+  `NEW` / `OLD`).
+- **Renaming only the history table**, via `UseHistoryTable(...)`, main table untouched: only the
+  history table's `RenameTableOperation` appears. Under `HistoryWriter.Trigger`, the function is
+  dropped under the old name and recreated under the new one — its body's `INSERT INTO <history table>`
+  and its own name both embed the table name literally, so this is the one rename that genuinely
+  requires it.
+
+This works because the history entity's identity in the EF model does not depend on its table name
+(DESIGN.md D15) — renaming the table doesn't change which entity the differ thinks it is. If you are
+upgrading from a Hindsight version before this, nothing changes for you unless you rename something:
+your existing history tables' identity is carried forward unchanged from your last migration, so
+upgrading Hindsight by itself produces no migration diff.
+
 ## Changing a column type
 
 Both tables get the `ALTER COLUMN`. If the conversion can fail on old data (narrowing a type), the

@@ -31,6 +31,13 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     internal const string PeriodEndDefaultSql = "'infinity'::timestamp with time zone";
     internal const string ExtraColumnType = "jsonb";
 
+    // The history entity's identity in the model (DESIGN.md D15) for a source becoming temporal for
+    // the first time: stable across a later table rename, unlike the table name itself. Styled after
+    // EF's own generated names for entities that don't come from a CLR type directly (e.g.
+    // "Blog.Owner#Owner" for an owned type) — '#' cannot appear in a CLR type name, so this can never
+    // collide with a real entity.
+    internal const string HistoryIdentitySuffix = "#History";
+
     // Building the snapshot model runs the finalizing conventions again (this one included); the flag
     // stops the re-entrant pass from resolving the snapshot a second time.
     [ThreadStatic]
@@ -46,20 +53,25 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             .Where(entityType => entityType[HindsightAnnotationNames.IsTemporal] is true)
             .ToList();
 
+        // Resolved once per pass (rather than once per entity type, as before) and shared by every
+        // callee below; guarded exactly as each callee used to guard it individually, so a re-entrant
+        // pass building the snapshot's own model never tries to resolve the snapshot a second time.
+        var snapshotModel = _resolvingSnapshotModel ? null : ResolveSnapshotModel();
+
         var liveHistoryEntityTypeNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var entityType in temporalEntityTypes)
         {
             ValidateTemporalEntityType(entityType);
-            var historyBuilder = BuildHistoryEntityType(modelBuilder, entityType);
+            var historyBuilder = BuildHistoryEntityType(modelBuilder, entityType, snapshotModel);
             if (historyBuilder is not null)
             {
                 liveHistoryEntityTypeNames.Add(historyBuilder.Metadata.Name);
-                RestoreOrphanedColumns(historyBuilder, entityType);
+                RestoreOrphanedColumns(historyBuilder, entityType, snapshotModel);
             }
         }
 
-        RestoreOrphanedHistoryEntityTypes(modelBuilder, liveHistoryEntityTypeNames);
+        RestoreOrphanedHistoryEntityTypes(modelBuilder, liveHistoryEntityTypeNames, snapshotModel);
     }
 
     private static void ValidateTemporalEntityType(IConventionEntityType entityType)
@@ -184,13 +196,14 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     }
 
     private static IConventionEntityTypeBuilder? BuildHistoryEntityType(
-        IConventionModelBuilder modelBuilder, IConventionEntityType source)
+        IConventionModelBuilder modelBuilder, IConventionEntityType source, IModel? snapshotModel)
     {
+        var historyIdentityName = ResolveHistoryIdentityName(source, snapshotModel);
         var historyTableName = (string?)source[HindsightAnnotationNames.HistoryTableName]
             ?? source.GetTableName() + TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix;
         var historySchema = (string?)source[HindsightAnnotationNames.HistoryTableSchema] ?? source.GetSchema();
 
-        var historyBuilder = modelBuilder.SharedTypeEntity(historyTableName, typeof(Dictionary<string, object>));
+        var historyBuilder = modelBuilder.SharedTypeEntity(historyIdentityName, typeof(Dictionary<string, object>));
         if (historyBuilder is null)
         {
             return null;
@@ -198,7 +211,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
         historyBuilder.ToTable(historyTableName, historySchema);
         historyBuilder.HasAnnotation(HindsightAnnotationNames.IsHistoryTable, true);
-        source.SetAnnotation(HindsightAnnotationNames.HistoryEntityType, historyTableName);
+        source.SetAnnotation(HindsightAnnotationNames.HistoryEntityType, historyIdentityName);
 
         MirrorEntityColumns(historyBuilder, source);
         AddPeriodColumns(historyBuilder, source);
@@ -206,6 +219,28 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         AddSurrogateKey(historyBuilder);
         AddVersionIndex(historyBuilder, source);
         return historyBuilder;
+    }
+
+    // DESIGN.md D15. The history entity's identity (its Name in the model, as opposed to its mapped
+    // table name) must survive a later rename of either the main table (default-suffix naming derives
+    // the history table name from it) or the history table itself (UseHistoryTable) — otherwise the
+    // differ can never see the rename as the SAME entity with a new table name, only as one entity
+    // disappearing and an unrelated one appearing (CreateTable, with the old one kept alive but
+    // orphaned by RestoreOrphanedHistoryEntityTypes below). A source already temporal in the previous
+    // snapshot keeps whatever identity it already had there, forever — the same "propagate forward"
+    // trick D6 already uses for Orphaned — which grandfathers every entity that was already temporal
+    // before this fix (its identity today equals its own table name) so upgrading Hindsight alone
+    // produces no migration diff. Only a source becoming temporal for the first time after this fix
+    // gets the new table-name-independent scheme.
+    private static string ResolveHistoryIdentityName(IConventionEntityType source, IModel? snapshotModel)
+    {
+        if (snapshotModel?.FindEntityType(source.Name) is { } snapshotSource
+            && (string?)snapshotSource[HindsightAnnotationNames.HistoryEntityType] is { } previousIdentity)
+        {
+            return previousIdentity;
+        }
+
+        return source.Name + HistoryIdentitySuffix;
     }
 
     private static void MirrorEntityColumns(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
@@ -285,14 +320,9 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     // DESIGN.md D6. A column present on the history table in the previous model snapshot but no longer
     // backed by a live entity property is re-added here — nullable, with its store facets copied from
     // the snapshot property, tagged Orphaned — so the differ sees no change and emits no DropColumn.
-    private void RestoreOrphanedColumns(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
+    private static void RestoreOrphanedColumns(
+        IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source, IModel? snapshotModel)
     {
-        if (_resolvingSnapshotModel)
-        {
-            return;
-        }
-
-        var snapshotModel = ResolveSnapshotModel();
         var snapshotHistory = snapshotModel?.FindEntityType(historyBuilder.Metadata.Name);
         if (snapshotHistory is null)
         {
@@ -344,17 +374,12 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     // — is not in liveHistoryEntityTypeNames, because it was never rebuilt above. Cloning it back from
     // the snapshot (columns, key, indexes, tagged Orphaned on the entity type itself) keeps it in the
     // model unchanged, so the differ sees no difference and never emits a DropTable (golden rule 3).
-    // Same re-entrancy guard as RestoreOrphanedColumns: building the snapshot model re-runs this
-    // convention, and the snapshot's own history entity types must not be re-cloned into themselves.
-    private void RestoreOrphanedHistoryEntityTypes(
-        IConventionModelBuilder modelBuilder, HashSet<string> liveHistoryEntityTypeNames)
+    // The re-entrancy guard lives in the caller now (ProcessModelFinalizing passes null while building
+    // the snapshot's own model), so the snapshot's own history entity types are never re-cloned into
+    // themselves.
+    private static void RestoreOrphanedHistoryEntityTypes(
+        IConventionModelBuilder modelBuilder, HashSet<string> liveHistoryEntityTypeNames, IModel? snapshotModel)
     {
-        if (_resolvingSnapshotModel)
-        {
-            return;
-        }
-
-        var snapshotModel = ResolveSnapshotModel();
         if (snapshotModel is null)
         {
             return;

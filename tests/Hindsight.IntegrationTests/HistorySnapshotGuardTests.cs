@@ -116,6 +116,43 @@ public sealed class HistorySnapshotGuardTests(PostgresFixture postgres)
 
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
+    public async Task Snapshot_from_AsOf_as_the_second_argument_of_Concat_is_still_guarded(HistoryWriter writer)
+    {
+        await using var h = await SeedTwoVersionsAsync(writer, nameof(Snapshot_from_AsOf_as_the_second_argument_of_Concat_is_still_guarded));
+
+        // The history query is arg[1] of Concat, not arg[0] — TryTagSequence's walk must not be
+        // limited to arg[0]. The other side is a plain (non-history) query, shaped as an explicit
+        // Select(p => new Policy { ... }) so it structurally matches the AsOf() projection — EF
+        // Core's set-operation translation requires both sides of a Concat/Union to assign the same
+        // properties, and a bare entity query root doesn't match a member-init projection.
+        var rows = await h.Db.Policies.Where(p => false)
+            .Select(p => new Policy { Id = p.Id, Number = p.Number, Status = p.Status, Premium = p.Premium })
+            .Concat(h.Db.Policies.AsOf(_t0.AddMinutes(30)))
+            .ToListAsync(Ct);
+        var snapshot = Assert.Single(rows);
+        h.Db.Update(snapshot);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Db.SaveChangesAsync(Ct));
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    public async Task Snapshot_from_AsOf_as_the_second_argument_of_Union_is_still_guarded(HistoryWriter writer)
+    {
+        await using var h = await SeedTwoVersionsAsync(writer, nameof(Snapshot_from_AsOf_as_the_second_argument_of_Union_is_still_guarded));
+
+        var rows = await h.Db.Policies.Where(p => false)
+            .Select(p => new Policy { Id = p.Id, Number = p.Number, Status = p.Status, Premium = p.Premium })
+            .Union(h.Db.Policies.AsOf(_t0.AddMinutes(30)))
+            .ToListAsync(Ct);
+        var snapshot = Assert.Single(rows);
+        h.Db.Update(snapshot);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Db.SaveChangesAsync(Ct));
+    }
+
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
     public async Task Snapshot_from_a_single_result_operator_with_a_predicate_is_still_guarded(HistoryWriter writer)
     {
         await using var h = await SeedTwoVersionsAsync(writer, nameof(Snapshot_from_a_single_result_operator_with_a_predicate_is_still_guarded));

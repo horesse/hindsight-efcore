@@ -71,6 +71,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   restored the same way; this remains a documented caveat — see
   [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
   [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+- The save-back guard (DESIGN.md D7) now also catches an `AsOf` / `AllVersions` / `History<T>()`
+  result reached through the *second* argument of `Concat` / `Union` / `Except` / `Intersect` (for
+  example `otherQuery.Concat(db.Policies.AsOf(at))`), not just the first. The internal tagging walk
+  only ever followed the first argument of each method call in the chain, so a history-derived
+  instance surfacing through that shape was never marked, and re-attaching it with `Update()` +
+  `SaveChanges()` silently wrote the stale snapshot back as the current version instead of throwing.
+
+### Changed
+
+- Documentation: the recommendation to use `HistoryWriter.Trigger` in production is now called out
+  right after the `UseHindsight(...)` configuration sample in `README.md`, and at the top of
+  [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
+  table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
+  writer when `UseHistoryWriter(...)` is never called.
 
 ## [1.0.0] - 2026-09-11
 

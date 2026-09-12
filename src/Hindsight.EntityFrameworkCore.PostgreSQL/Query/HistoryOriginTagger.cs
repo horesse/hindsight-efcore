@@ -76,37 +76,14 @@ internal static class HistoryOriginTagger
         return TryTagSequence(root, markers, predicate: null) ?? root;
     }
 
-    // Walk arg[0] from `sequence` down; if it reaches a rewritten marker and `sequence` still yields
-    // that marker's element type, wrap `sequence` (optionally filtered by `predicate` first) in the
-    // matching Tag / TagVersion Select. Returns null when nothing should be tagged.
+    // Walk down from `sequence`; if any reachable branch is a rewritten marker yielding `sequence`'s
+    // element type, wrap `sequence` (optionally filtered by `predicate` first) in the matching Tag /
+    // TagVersion Select. Returns null when nothing should be tagged.
     private static MethodCallExpression? TryTagSequence(
         Expression sequence, IReadOnlyDictionary<Expression, Type> markers, LambdaExpression? predicate)
     {
-        if (!TryGetElementType(sequence.Type, out var elementType))
+        if (!TryGetElementType(sequence.Type, out var elementType) || !ReachesMarker(sequence, elementType, markers))
         {
-            return null;
-        }
-
-        var node = sequence;
-        while (true)
-        {
-            if (markers.TryGetValue(node, out var resultType))
-            {
-                if (resultType != elementType)
-                {
-                    return null;
-                }
-
-                break;
-            }
-
-            if (node is MethodCallExpression m && m.Arguments.Count > 0
-                && TryGetElementType(m.Arguments[0].Type, out _))
-            {
-                node = m.Arguments[0];
-                continue;
-            }
-
             return null;
         }
 
@@ -116,6 +93,38 @@ internal static class HistoryOriginTagger
                 _queryableWhere.MakeGenericMethod(elementType), sequence, Expression.Quote(predicate));
 
         return TagSelect(filtered, elementType);
+    }
+
+    // Whether `node` is, or descends to, a rewritten marker yielding `elementType`. Checks every
+    // sequence-typed argument of a method call, not just the first: Concat / Union / Except /
+    // Intersect all take two sequence arguments, and the marker can be reachable through either one
+    // (e.g. `otherQuery.Concat(db.Policies.AsOf(t))`, where the history query is arg[1]). Finding a
+    // marker through ANY branch is enough to tag the whole outer sequence — HistoryOrigin.Tag /
+    // TagVersion is a no-op for an instance that didn't actually come from history (it just adds an
+    // unused ConditionalWeakTable entry), so over-tagging the untagged side of the same Concat/Union
+    // is harmless, whereas under-tagging the history-derived side would silently defeat the
+    // save-back guard (DESIGN.md D7) — the failure mode this walk exists to avoid.
+    private static bool ReachesMarker(Expression node, Type elementType, IReadOnlyDictionary<Expression, Type> markers)
+    {
+        if (markers.TryGetValue(node, out var resultType))
+        {
+            return resultType == elementType;
+        }
+
+        if (node is not MethodCallExpression m)
+        {
+            return false;
+        }
+
+        foreach (var argument in m.Arguments)
+        {
+            if (TryGetElementType(argument.Type, out _) && ReachesMarker(argument, elementType, markers))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static MethodCallExpression TagSelect(Expression sequence, Type elementType)

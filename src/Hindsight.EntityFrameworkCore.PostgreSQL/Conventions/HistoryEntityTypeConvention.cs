@@ -92,6 +92,22 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
                 + "require a key; use HasKey() or mark the entity as keyless and remove IsTemporal().");
         }
 
+        // A property still exists and is still the primary key here — it is only marked non-versioned.
+        // If every key property is excluded, the history table mirrors none of them (MirrorEntityColumns
+        // skips excluded properties too), so there is no column left to identify which history rows
+        // belong to which version of the entity. The writer's "close the previous version" step has
+        // nothing to match on, and it would silently write no history row at all, forever, with no
+        // error (CLAUDE.md rule 2). Reject at model build time instead.
+        if (entityType.FindPrimaryKey()!.Properties.All(property => property[HindsightAnnotationNames.IsExcluded] is true))
+        {
+            throw new InvalidOperationException(
+                $"Entity '{entityType.DisplayName()}' is temporal but every property of its primary key is "
+                + "excluded from history with Exclude(...). Hindsight has no way to tell which history rows "
+                + "belong to which version of the entity without at least one key column, so the writer could "
+                + "never find the previous version to close. Un-exclude at least one primary-key property — "
+                + "Exclude(...) is meant for noisy non-key columns, not the key itself.");
+        }
+
         if (entityType.GetTableName() is null)
         {
             throw new InvalidOperationException(

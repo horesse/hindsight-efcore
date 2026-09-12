@@ -32,6 +32,20 @@ jobs:
         with:
           fetch-depth: 0 # MinVer needs tags and history
 
+      - name: PublicAPI.Shipped.txt sanity check
+        # Guards against forgetting Releasing step 3 (CONTRIBUTING.md): once any vX.Y.Z tag exists,
+        # PublicAPI.Shipped.txt must have shipped symbols in it, or PublicApiAnalyzers/package
+        # validation can't actually protect users of the published package from a breaking change.
+        run: |
+          if git tag --list 'v[0-9]*.[0-9]*.[0-9]*' | grep -q .; then
+            shipped=src/Hindsight.EntityFrameworkCore.PostgreSQL/PublicAPI.Shipped.txt
+            symbols=$(grep -cv '^#nullable enable$\|^[[:space:]]*$' "$shipped" || true)
+            if [ "$symbols" -eq 0 ]; then
+              echo "::error file=$shipped::A release tag exists but $shipped has no shipped symbols. Releasing step 3 in CONTRIBUTING.md (move PublicAPI.Unshipped.txt entries into PublicAPI.Shipped.txt) looks like it was skipped."
+              exit 1
+            fi
+          fi
+
       - uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json

@@ -18,7 +18,10 @@ modelBuilder.Entity<Risk>().IsTemporal(t => t
 ```
 
 `Exclude` removes a property from versioning entirely: the column is not copied to the history table,
-and a `SaveChanges` that touched only excluded properties writes no history row.
+and a `SaveChanges` that touched only excluded properties writes no history row. You can exclude some
+primary-key properties of a composite key as long as at least one stays versioned — but excluding all
+of them is rejected (see [Model validation](#model-validation)), since Hindsight would then have no
+column left to identify which history rows belong to which version of the entity.
 
 ## Enabling Hindsight
 
@@ -30,6 +33,13 @@ services.AddDbContext<AppDbContext>(o => o
 
 `UseHindsight()` turns on the convention that builds a history table into the model for every
 `IsTemporal()` entity, and installs the history writer that fills those tables on `SaveChanges`.
+
+Hindsight only supports the Npgsql/PostgreSQL provider (see
+[Limitations and non-goals](limitations.md#not-in-v1)). It checks for this itself: the first time the
+context is used with any other provider configured (`UseSqlite(...)`, `UseSqlServer(...)`, and so on),
+Hindsight fails fast with a clear `InvalidOperationException` naming the provider it found and the one
+it needs, instead of letting you hit a confusing error later from EF Core's migrations or SQL
+generation.
 
 ## Choosing the history writer
 
@@ -52,15 +62,15 @@ ignores `TimeProvider`; assert on interval shape instead, or use distinct transa
 
 ## EnableRetryOnFailure and transactions
 
-Both writers open a transaction themselves when `SaveChanges` is called with none already open, so the
-data change and the history row(s) commit together (see [History writers](history-writers.md)). That
+Both writers open a transaction themselves when `SaveChanges` is called with none already open (and no
+ambient `TransactionScope` either — see [Ambient TransactionScope](#ambient-transactionscope) below), so
+the data change and the history row(s) commit together (see [History writers](history-writers.md)). That
 transaction is opened from inside `SaveChanges` itself, which is a problem for
 `UseNpgsql(cs, o => o.EnableRetryOnFailure())`: its retrying execution strategy can re-run the whole
 `SaveChanges` call after a transient failure, and a transaction opened inside that call would not
-survive the retry. EF Core (or Npgsql, for an ambient `TransactionScope`) refuses to let that happen —
-so, with retry enabled and no transaction of your own, `SaveChanges` throws
-`InvalidOperationException` naming the conflict and the fix, from whichever writer would have opened
-the transaction:
+survive the retry. EF Core refuses to let that happen — so, with retry enabled and no transaction of
+your own, `SaveChanges` throws `InvalidOperationException` naming the conflict and the fix, from
+whichever writer would have opened the transaction:
 
 ```csharp
 services.AddDbContext<AppDbContext>(o => o
@@ -90,10 +100,39 @@ await strategy.ExecuteAsync(async () =>
 ```
 
 If you never open your own transaction around a `SaveChanges` that writes a temporal entity, do not
-combine `EnableRetryOnFailure()` with Hindsight. An ambient `System.Transactions.TransactionScope` is
-not a fix either — it is not supported here at all, with or without retry enabled, because Hindsight
-opening its own transaction inside one is exactly the case Npgsql and EF Core refuse (see
-[Limitations → Known trade-offs](limitations.md#known-trade-offs)).
+combine `EnableRetryOnFailure()` with Hindsight — not even by wrapping the call in an ambient
+`TransactionScope` instead of `CreateExecutionStrategy()`. A retrying execution strategy refuses to run
+inside an ambient `TransactionScope` at all (a transient failure could not be retried inside a
+transaction that already exists), regardless of whether Hindsight would have opened a transaction of its
+own — `SaveChanges` throws EF Core's own `InvalidOperationException` ("does not support user-initiated
+transactions") before either writer's `SavingChanges` hook even runs.
+
+## Ambient TransactionScope
+
+Without `EnableRetryOnFailure()`, an ambient `System.Transactions.TransactionScope` opened around a
+`SaveChanges` that has no transaction of its own works, in both writer modes:
+
+```csharp
+using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
+db.Policies.Add(new Policy { /* ... */ });
+await db.SaveChangesAsync();
+scope.Complete();
+```
+
+Npgsql enlists the connection in the ambient transaction automatically the moment it opens, and every
+command Hindsight or EF Core runs on that connection afterwards — the data write, the trigger writer's
+`set_config` push, the history `INSERT` — rides that enlistment. Opening a second, EF-managed transaction
+on top of an already-enlisted connection is exactly what EF Core refuses
+(`InvalidOperationException: An ambient transaction has been detected...`), so when
+`context.Database.CurrentTransaction` is `null` and `System.Transactions.Transaction.Current` is not,
+Hindsight opens no transaction of its own — it opens the connection explicitly instead (so the
+enlistment happens immediately) and lets the ambient scope own commit and rollback entirely: calling
+`scope.Complete()` commits the data change and the history row(s) together, and letting the `using` block
+dispose without calling it rolls both back together, exactly as with a transaction Hindsight opens
+itself. This holds whether `SaveChanges` is the first operation to touch the connection in the scope or
+a query already ran on it first, and whether the connection was previously used (and closed) before the
+scope even started — Npgsql re-enlists a connection into whichever transaction is ambient the next time
+it opens, pooled or not.
 
 ## Context configuration
 
@@ -160,6 +199,62 @@ using (db.WithReason("Backdated correction after audit"))
 ```
 
 `WithReason` works with or without a provider registered; scopes nest and the innermost one wins.
+The scope is tied to `db` specifically — a `SaveChanges` on a different `DbContext` instance, even
+one running inside the same `using` block, is never affected.
+
+## Pooled and factory-created contexts
+
+`AddDbContextPool<T>()`, `AddDbContextFactory<T>()` and `AddPooledDbContextFactory<T>()` all build one
+`DbContextOptions` instance once, when the pool or factory is configured, and every pooled or
+factory-created `DbContext` instance shares it. `CoreOptionsExtension.ApplicationServiceProvider` —
+the provider Hindsight resolves `IChangeContextProvider` from — is baked into that shared instance at
+the moment it is built, which is normally the application's **root** container, not any request's
+scope. Confirmed against EF Core 10.0.12: it is identical across every simulated request that rents
+from the same pool or factory, unlike plain `AddDbContext<T>()`, where each request gets its own
+`DbContextOptions` built from that request's own scope.
+
+A `HttpChangeContextProvider` registered `Scoped`, exactly as in the example above, cannot be resolved
+correctly from a captured root provider:
+
+- With `ServiceProviderOptions.ValidateScopes` on — ASP.NET Core's Development default — every
+  `SaveChanges` that writes a temporal entity throws immediately:
+  `InvalidOperationException: Failed to resolve change context provider '...'. ... Cannot resolve
+  scoped service '...' from root provider.` Loud, but only because Development happens to validate
+  this; nothing stops the same misconfiguration in Production.
+- With `ValidateScopes` off — the common Production default unless explicitly configured — the
+  container silently hands back a **captive singleton**: the first request's `HttpChangeContextProvider`
+  instance, with whatever it captured from `IHttpContextAccessor` at construction, reused for every
+  later `SaveChanges` regardless of which request is actually running. Every history row after the
+  first is silently stamped with the wrong user.
+
+There is no registration pattern for the provider itself that avoids this — the fixed point is
+`ApplicationServiceProvider`, not the provider's own lifetime. Hindsight resolves it fresh from the
+current `DbContext` instance on every `SaveChanges`, but every pooled/factory-created instance points
+at the same pinned, captured provider regardless. The fix is to register the provider `Singleton` and
+read per-request state fresh inside `GetChangeContext`, rather than capturing a scoped dependency in
+its constructor. `IHttpContextAccessor` is itself already a singleton, backed by `AsyncLocal`, so the
+sample provider above needs no change beyond its registration:
+
+```csharp
+services.AddHttpContextAccessor();
+services.AddSingleton<HttpChangeContextProvider>(); // not AddScoped
+
+services.AddDbContextPool<AppDbContext>(o => o
+    .UseNpgsql(connectionString)
+    .UseHindsight(h => h.WithChangeContext<HttpChangeContextProvider>()));
+```
+
+`HttpChangeContextProvider` above already only reads `accessor.HttpContext` inside `GetChangeContext`
+— nothing is captured at construction — so making it a singleton is enough; no other code changes.
+The same applies to `AddDbContextFactory<T>()` and `AddPooledDbContextFactory<T>()`.
+
+This is a hard constraint, not something Hindsight can detect and correct at runtime: from inside the
+resolution call there is no public API that distinguishes "a captured root provider silently handing
+back a captive singleton" from "a correctly scoped provider that happens to already exist" — both look
+identical to `IServiceProvider.GetService`. `HindsightOptionsExtension.Validate` cannot help either: it
+runs before any service provider necessarily exists to inspect. The only case Hindsight can improve is
+the loud one — `ValidateScopes` on — where the thrown `InvalidOperationException` names the provider
+and this section instead of forwarding ASP.NET Core's generic, Hindsight-unaware message on its own.
 
 ## Model validation
 
@@ -167,6 +262,10 @@ Hindsight validates the model at build time — the same point `dotnet ef migrat
 — and fails fast with a specific message when:
 
 - a temporal entity has no primary key;
+- every property of a temporal entity's primary key is excluded from history with `Exclude(...)` —
+  Hindsight would have no column left to identify which history rows belong to which version of the
+  entity, so un-exclude at least one primary-key property (`Exclude(...)` is meant for noisy non-key
+  columns, not the key itself);
 - a temporal entity is not mapped to a table;
 - a temporal entity has an owned reference (`OwnsOne`) or a complex property — their columns live on
   their own type, not the owner's, so history can't mirror them (not supported in v1);

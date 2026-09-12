@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -28,7 +29,7 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(
             nameof(Renaming_the_main_table_produces_one_rename_for_it_and_one_for_its_default_named_history_table), Ct);
 
-        await using var v1 = Build(mainTable: "policies", historyTable: null, connectionString: cs);
+        await using var v1 = Build(mainTable: "policies", historyTable: null);
         var v1Model = v1.GetService<IDesignTimeModel>().Model;
         await ApplySchemaAsync(v1, cs);
 
@@ -94,7 +95,7 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(
             nameof(Renaming_only_the_history_table_keeps_it_writable_and_keeps_its_data), Ct);
 
-        await using var v1 = Build(mainTable: "policies", historyTable: "policy_history_v1", connectionString: cs);
+        await using var v1 = Build(mainTable: "policies", historyTable: "policy_history_v1");
         var v1Model = v1.GetService<IDesignTimeModel>().Model;
         await ApplySchemaAsync(v1, cs);
 
@@ -142,7 +143,7 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(
             nameof(Renaming_the_main_table_with_a_fixed_history_table_name_needs_no_trigger_ddl), Ct);
 
-        await using var v1 = Build(mainTable: "policies", historyTable: "policies_history_fixed", connectionString: cs);
+        await using var v1 = Build(mainTable: "policies", historyTable: "policies_history_fixed");
         var v1Model = v1.GetService<IDesignTimeModel>().Model;
         await ApplySchemaAsync(v1, cs);
 
@@ -239,7 +240,14 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         var builder = new DbContextOptionsBuilder<RenameContext>()
             .UseNpgsql(connectionString ?? "Host=localhost;Database=unused")
             .ReplaceService<IModelCacheKeyFactory, RenameAwareModelCacheKeyFactory>()
-            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger));
+            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
+            // Each test builds several deliberately distinct, short-lived contexts (one per rename side)
+            // purely to diff their models — exactly the "unique service provider per context" pattern
+            // this EF Core diagnostic exists to catch in long-lived production code, not in a handful of
+            // throwaway test contexts. Left unsuppressed, it throws once the whole test process's
+            // cumulative count of such contexts (this file's plus every other test file's) crosses EF's
+            // built-in threshold — a threshold this file alone doesn't control.
+            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
 
         return new RenameContext(builder.Options, mainTable, historyTable, snapshotModel);
     }
@@ -273,11 +281,15 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
-            if (snapshotModel is not null)
-            {
-                optionsBuilder.ReplaceService<IMigrationsAssembly, StubMigrationsAssembly>();
-                StubMigrationsAssembly.Snapshot.Value = new StubModelSnapshot(snapshotModel);
-            }
+            // Always replaced (never conditionally), so every context in this file shares one
+            // DbContextOptions shape and therefore one cached internal service provider: whether there
+            // is a snapshot to feed the convention is controlled by the AsyncLocal's value below, not by
+            // varying which services are replaced. A per-test-method conditional replacement here would
+            // each need its own service provider, adding to the process-wide count that trips EF Core's
+            // "more than twenty service providers" diagnostic once enough unrelated test files do the
+            // same thing.
+            optionsBuilder.ReplaceService<IMigrationsAssembly, StubMigrationsAssembly>();
+            StubMigrationsAssembly.Snapshot.Value = snapshotModel is null ? null : new StubModelSnapshot(snapshotModel);
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)

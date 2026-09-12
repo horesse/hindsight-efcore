@@ -14,10 +14,21 @@ namespace Hindsight.Writers;
 /// <see cref="InvalidOperationException"/> if it finds such an instance being persisted.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Registered in both writer modes (there is no history writer running in <c>Trigger</c> mode to
 /// catch this otherwise). Legitimate saves are untouched: a hand-built instance, one loaded with
 /// <c>Find</c> / a normal query, or values copied off a snapshot onto a fresh instance are never
 /// marked.
+/// </para>
+/// <para>
+/// Running first also makes this the one call per <c>SaveChanges</c> that lets
+/// <c>AutoDetectChangesEnabled</c> actually run <c>DetectChanges()</c>: <see cref="HistoryRowPlan.BuildPending"/>
+/// and <c>HistoryTriggerContextInterceptor.HasTemporalChange</c> both suppress it around their own
+/// <c>Entries()</c> walk and rely on this one having already run. Moving this interceptor's
+/// registration to run after either of those would silently make them see stale tracked state — if
+/// the registration order in <see cref="Hindsight.Infrastructure.HindsightOptionsExtension"/> ever
+/// changes, revisit that suppression too.
+/// </para>
 /// </remarks>
 internal sealed class HistorySnapshotGuardInterceptor : SaveChangesInterceptor
 {

@@ -202,6 +202,45 @@ public sealed class AllVersionsQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task AllVersions_with_ExecuteUpdate_throws_NotSupported_naming_the_D7_reason()
+    {
+        // Regression: without this guard, EF Core's own translator resolves this straight to an
+        // UPDATE against policies_history (the audit trail), not an error and not the main table.
+        await using var h = await SeedThreeVersionsAsync(nameof(AllVersions_with_ExecuteUpdate_throws_NotSupported_naming_the_D7_reason));
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.Policies.AllVersions().ExecuteUpdateAsync(set => set.SetProperty(p => p.Status, "Hacked"), Ct));
+
+        Assert.Contains("ExecuteUpdate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("D7", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllVersions_with_ExecuteDelete_throws_NotSupported_naming_the_D7_reason()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(AllVersions_with_ExecuteDelete_throws_NotSupported_naming_the_D7_reason));
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.Policies.AllVersions().ExecuteDeleteAsync(Ct));
+
+        Assert.Contains("ExecuteDelete", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("D7", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AllVersions_ExecuteUpdate_rejection_writes_nothing_to_history_or_the_main_table()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(AllVersions_ExecuteUpdate_rejection_writes_nothing_to_history_or_the_main_table));
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.Policies.AllVersions().ExecuteUpdateAsync(set => set.SetProperty(p => p.Status, "Hacked"), Ct));
+
+        Assert.Equal("Cancelled", (await h.Db.Policies.SingleAsync(Ct)).Status);
+        var versions = await h.Db.Policies.AllVersions().ToListAsync(Ct);
+        Assert.Equal(["Cancelled", "Active", "Draft"], versions.Select(p => p.Status));
+    }
+
+    [Fact]
     public async Task AllVersions_generates_the_expected_sql()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(AllVersions_generates_the_expected_sql));

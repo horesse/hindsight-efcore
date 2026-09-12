@@ -264,6 +264,44 @@ public sealed class HistoryQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task History_with_ExecuteUpdate_throws_NotSupported_naming_the_D7_reason()
+    {
+        // Regression: without this guard, EF Core's own translator resolves this straight to an
+        // UPDATE against policies_history (the audit trail), not an error and not the main table.
+        await using var h = await SeedThreeVersionsAsync(nameof(History_with_ExecuteUpdate_throws_NotSupported_naming_the_D7_reason));
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.History<Policy>().ExecuteUpdateAsync(set => set.SetProperty(v => v.Reason, "Hacked"), Ct));
+
+        Assert.Contains("ExecuteUpdate", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("D7", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task History_with_ExecuteDelete_throws_NotSupported_naming_the_D7_reason()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(History_with_ExecuteDelete_throws_NotSupported_naming_the_D7_reason));
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.History<Policy>().ExecuteDeleteAsync(Ct));
+
+        Assert.Contains("ExecuteDelete", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("D7", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task History_ExecuteUpdate_rejection_writes_nothing_to_history()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(History_ExecuteUpdate_rejection_writes_nothing_to_history));
+
+        await Assert.ThrowsAsync<NotSupportedException>(() =>
+            h.Db.History<Policy>().ExecuteUpdateAsync(set => set.SetProperty(v => v.Reason, "Hacked"), Ct));
+
+        var versions = await h.Db.History<Policy>().ToListAsync(Ct);
+        Assert.All(versions, v => Assert.Null(v.Reason));
+    }
+
+    [Fact]
     public async Task History_generates_the_expected_sql()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(History_generates_the_expected_sql));

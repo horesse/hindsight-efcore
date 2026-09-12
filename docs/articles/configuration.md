@@ -62,15 +62,15 @@ ignores `TimeProvider`; assert on interval shape instead, or use distinct transa
 
 ## EnableRetryOnFailure and transactions
 
-Both writers open a transaction themselves when `SaveChanges` is called with none already open, so the
-data change and the history row(s) commit together (see [History writers](history-writers.md)). That
+Both writers open a transaction themselves when `SaveChanges` is called with none already open (and no
+ambient `TransactionScope` either — see [Ambient TransactionScope](#ambient-transactionscope) below), so
+the data change and the history row(s) commit together (see [History writers](history-writers.md)). That
 transaction is opened from inside `SaveChanges` itself, which is a problem for
 `UseNpgsql(cs, o => o.EnableRetryOnFailure())`: its retrying execution strategy can re-run the whole
 `SaveChanges` call after a transient failure, and a transaction opened inside that call would not
-survive the retry. EF Core (or Npgsql, for an ambient `TransactionScope`) refuses to let that happen —
-so, with retry enabled and no transaction of your own, `SaveChanges` throws
-`InvalidOperationException` naming the conflict and the fix, from whichever writer would have opened
-the transaction:
+survive the retry. EF Core refuses to let that happen — so, with retry enabled and no transaction of
+your own, `SaveChanges` throws `InvalidOperationException` naming the conflict and the fix, from
+whichever writer would have opened the transaction:
 
 ```csharp
 services.AddDbContext<AppDbContext>(o => o
@@ -100,10 +100,39 @@ await strategy.ExecuteAsync(async () =>
 ```
 
 If you never open your own transaction around a `SaveChanges` that writes a temporal entity, do not
-combine `EnableRetryOnFailure()` with Hindsight. An ambient `System.Transactions.TransactionScope` is
-not a fix either — it is not supported here at all, with or without retry enabled, because Hindsight
-opening its own transaction inside one is exactly the case Npgsql and EF Core refuse (see
-[Limitations → Known trade-offs](limitations.md#known-trade-offs)).
+combine `EnableRetryOnFailure()` with Hindsight — not even by wrapping the call in an ambient
+`TransactionScope` instead of `CreateExecutionStrategy()`. A retrying execution strategy refuses to run
+inside an ambient `TransactionScope` at all (a transient failure could not be retried inside a
+transaction that already exists), regardless of whether Hindsight would have opened a transaction of its
+own — `SaveChanges` throws EF Core's own `InvalidOperationException` ("does not support user-initiated
+transactions") before either writer's `SavingChanges` hook even runs.
+
+## Ambient TransactionScope
+
+Without `EnableRetryOnFailure()`, an ambient `System.Transactions.TransactionScope` opened around a
+`SaveChanges` that has no transaction of its own works, in both writer modes:
+
+```csharp
+using var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled);
+db.Policies.Add(new Policy { /* ... */ });
+await db.SaveChangesAsync();
+scope.Complete();
+```
+
+Npgsql enlists the connection in the ambient transaction automatically the moment it opens, and every
+command Hindsight or EF Core runs on that connection afterwards — the data write, the trigger writer's
+`set_config` push, the history `INSERT` — rides that enlistment. Opening a second, EF-managed transaction
+on top of an already-enlisted connection is exactly what EF Core refuses
+(`InvalidOperationException: An ambient transaction has been detected...`), so when
+`context.Database.CurrentTransaction` is `null` and `System.Transactions.Transaction.Current` is not,
+Hindsight opens no transaction of its own — it opens the connection explicitly instead (so the
+enlistment happens immediately) and lets the ambient scope own commit and rollback entirely: calling
+`scope.Complete()` commits the data change and the history row(s) together, and letting the `using` block
+dispose without calling it rolls both back together, exactly as with a transaction Hindsight opens
+itself. This holds whether `SaveChanges` is the first operation to touch the connection in the scope or
+a query already ran on it first, and whether the connection was previously used (and closed) before the
+scope even started — Npgsql re-enlists a connection into whichever transaction is ambient the next time
+it opens, pooled or not.
 
 ## Context configuration
 

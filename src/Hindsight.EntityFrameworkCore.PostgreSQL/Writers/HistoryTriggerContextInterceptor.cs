@@ -24,12 +24,17 @@ namespace Hindsight.Writers;
 /// runs a single-statement <c>SaveChanges</c> without a transaction, and <c>set_config(..., true)</c>
 /// outside a transaction has no effect. The transaction it opens is committed in <c>SavedChanges</c>
 /// and rolled back in <c>SaveChangesFailed</c>, so the data change, the trigger's history rows and the
-/// context all commit together. Bulk operations (<c>ExecuteUpdate</c>/<c>ExecuteDelete</c>) do not pass
-/// through here: the trigger still records their history, with <see langword="null"/> context columns
-/// (DESIGN.md D4). A configured retrying execution strategy makes opening that transaction unsafe —
-/// see <see cref="HistoryWriterTransaction"/> — but only once there is actually a context to push
-/// (<see cref="Capture"/> returns <see langword="null"/>, and no transaction is touched, when neither a
-/// change context provider nor <see cref="ChangeReasonScope"/> is in use).
+/// context all commit together. Under an ambient <see cref="System.Transactions.TransactionScope"/>
+/// <see cref="HistoryWriterTransaction"/> opens no transaction of its own — it opens the connection
+/// explicitly instead, so it enlists in the ambient transaction, and the push command rides that
+/// enlistment with no <see cref="System.Data.Common.DbTransaction"/> attached; commit/rollback is then
+/// the ambient scope's job, not this interceptor's, and <c>SavedChanges</c>/<c>SaveChangesFailed</c>
+/// only close the connection back down again. Bulk operations (<c>ExecuteUpdate</c>/<c>ExecuteDelete</c>)
+/// do not pass through here: the trigger still records their history, with <see langword="null"/>
+/// context columns (DESIGN.md D4). A configured retrying execution strategy makes opening a new EF
+/// transaction unsafe — see <see cref="HistoryWriterTransaction"/> — but only once there is actually a
+/// context to push (<see cref="Capture"/> returns <see langword="null"/>, and no transaction is touched,
+/// when neither a change context provider nor <see cref="ChangeReasonScope"/> is in use).
 /// </remarks>
 internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 {
@@ -68,8 +73,9 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
-            owned.Transaction.Commit();
-            owned.Transaction.Dispose();
+            owned.TransactionOutcome.OwnedTransaction?.Commit();
+            owned.TransactionOutcome.OwnedTransaction?.Dispose();
+            owned.TransactionOutcome.CloseAmbientConnection(context);
         }
 
         return base.SavedChanges(eventData, result);
@@ -81,8 +87,13 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
-            await owned.Transaction.CommitAsync(cancellationToken);
-            await owned.Transaction.DisposeAsync();
+            if (owned.TransactionOutcome.OwnedTransaction is { } transaction)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                await transaction.DisposeAsync();
+            }
+
+            await owned.TransactionOutcome.CloseAmbientConnectionAsync(context);
         }
 
         return await base.SavedChangesAsync(eventData, result, cancellationToken);
@@ -93,8 +104,9 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
-            owned.Transaction.Rollback();
-            owned.Transaction.Dispose();
+            owned.TransactionOutcome.OwnedTransaction?.Rollback();
+            owned.TransactionOutcome.OwnedTransaction?.Dispose();
+            owned.TransactionOutcome.CloseAmbientConnection(context);
         }
 
         base.SaveChangesFailed(eventData);
@@ -106,8 +118,13 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
-            await owned.Transaction.RollbackAsync(cancellationToken);
-            await owned.Transaction.DisposeAsync();
+            if (owned.TransactionOutcome.OwnedTransaction is { } transaction)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await transaction.DisposeAsync();
+            }
+
+            await owned.TransactionOutcome.CloseAmbientConnectionAsync(context);
         }
 
         await base.SaveChangesFailedAsync(eventData, cancellationToken);
@@ -127,7 +144,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var owned = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Trigger);
+        var transactionOutcome = HistoryWriterTransaction.BeginIfNeeded(context, HistoryWriter.Trigger);
 
         try
         {
@@ -139,14 +156,15 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         }
         catch
         {
-            owned?.Rollback();
-            owned?.Dispose();
+            transactionOutcome.OwnedTransaction?.Rollback();
+            transactionOutcome.OwnedTransaction?.Dispose();
+            transactionOutcome.CloseAmbientConnection(context);
             throw;
         }
 
-        if (owned is not null)
+        if (transactionOutcome.OwnedTransaction is not null || transactionOutcome.OpenedConnectionForAmbientTransaction)
         {
-            _pending.Add(context, new OwnedTransaction(owned));
+            _pending.Add(context, new OwnedTransaction(transactionOutcome));
         }
     }
 
@@ -160,7 +178,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             return;
         }
 
-        var owned = await HistoryWriterTransaction.BeginIfNeededAsync(context, HistoryWriter.Trigger, cancellationToken);
+        var transactionOutcome = await HistoryWriterTransaction.BeginIfNeededAsync(context, HistoryWriter.Trigger, cancellationToken);
 
         try
         {
@@ -172,18 +190,19 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         }
         catch
         {
-            if (owned is not null)
+            if (transactionOutcome.OwnedTransaction is { } transaction)
             {
-                await owned.RollbackAsync(cancellationToken);
-                await owned.DisposeAsync();
+                await transaction.RollbackAsync(cancellationToken);
+                await transaction.DisposeAsync();
             }
 
+            await transactionOutcome.CloseAmbientConnectionAsync(context);
             throw;
         }
 
-        if (owned is not null)
+        if (transactionOutcome.OwnedTransaction is not null || transactionOutcome.OpenedConnectionForAmbientTransaction)
         {
-            _pending.Add(context, new OwnedTransaction(owned));
+            _pending.Add(context, new OwnedTransaction(transactionOutcome));
         }
     }
 
@@ -314,5 +333,5 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         return () => Activator.CreateInstance(providerType)!;
     }
 
-    private sealed record OwnedTransaction(IDbContextTransaction Transaction);
+    private sealed record OwnedTransaction(HistoryWriterTransaction.Outcome TransactionOutcome);
 }

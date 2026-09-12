@@ -58,11 +58,14 @@
   with a writer opening its own transaction: `SaveChanges` throws `InvalidOperationException` naming
   the conflict unless you wrap the call yourself in
   `CreateExecutionStrategy().Execute(...)`/`ExecuteAsync(...)` with your own transaction open before
-  `SaveChanges` runs. See [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
-- **Ambient `System.Transactions.TransactionScope`** is not supported by either writer when it needs to
-  open its own transaction (the caller has none), with or without `EnableRetryOnFailure()`: Npgsql
-  refuses to start a second transaction on a connection already enlisted in one. Open the transaction
-  through `context.Database.BeginTransaction()` instead.
+  `SaveChanges` runs. An ambient `System.Transactions.TransactionScope` is not a workaround for this
+  one: a retrying execution strategy refuses to run inside an ambient transaction at all, with its own
+  `InvalidOperationException`, regardless of Hindsight. See
+  [Configuration → EnableRetryOnFailure and transactions](configuration.md#enableretryonfailure-and-transactions).
+- **Ambient `System.Transactions.TransactionScope`** *is* supported by both writers, without
+  `EnableRetryOnFailure()`: Hindsight opens no transaction of its own when one is detected, and instead
+  cooperates with the ambient one (which then owns commit/rollback for the data change and the history
+  row(s) together). See [Configuration → Ambient TransactionScope](configuration.md#ambient-transactionscope).
 - **A failed history write under `HistoryWriter.Interceptor` leaves a deleted entity `Detached`.** If
   the history write for a `Deleted` entity fails — invalid `ChangeContext.Extra` JSON, a transient
   connection failure — the whole transaction (data change included) rolls back correctly, but the

@@ -44,7 +44,13 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
 - `Interceptor`: a `SaveChangesInterceptor`. In `SavingChanges` it snapshots the tracked temporal
   entities (state + versioned column values + which non-excluded properties changed) and, if the
   caller has no transaction open, starts one so the data change and the history rows commit together
-  (D3). In `SavedChanges` — after the batch, so store-generated keys are known — it re-reads current
+  (D3) — unless an ambient `System.Transactions.TransactionScope` is present, in which case starting a
+  second, EF-managed transaction is exactly what EF Core refuses; `HistoryWriterTransaction` detects
+  `System.Transactions.Transaction.Current` (public API) and opens the connection explicitly instead,
+  so Npgsql enlists it in the ambient transaction and every command from here on — the data write, the
+  history `INSERT`, the trigger writer's `set_config` push — rides that enlistment with no separate
+  `DbTransaction`; commit/rollback is then the ambient scope's job (`docs/articles/configuration.md` →
+  Ambient TransactionScope). In `SavedChanges` — after the batch, so store-generated keys are known — it re-reads current
   values for `Added`/`Modified` and writes the history rows on the same connection and transaction
   via parameterised SQL (`ISqlGenerationHelper` for identifiers, each history column's
   `RelationalTypeMapping` for values); it commits only the transaction it started itself. Cross-hook

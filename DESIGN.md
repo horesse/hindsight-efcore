@@ -215,6 +215,29 @@ a delete is meant to be read (D12).
 came from history — re-attaching one with `Update` / `Attach` / `Add` / `Remove` and calling
 `SaveChanges` — throws `InvalidOperationException` with a clear message; see D12 for the mechanism.
 
+**`ExecuteUpdate` / `ExecuteDelete` on a marked query — resolved by spike, 2026-09-12.** The
+save-back guard above only covers `SaveChanges`; `ExecuteUpdate`/`ExecuteDelete` bypass the change
+tracker entirely and translate the `IQueryable` directly into SQL, so that guard does nothing for
+them. Verified against real PostgreSQL what EF Core 10 actually does with, e.g.,
+`db.Policies.AsOf(t).ExecuteUpdateAsync(...)`: after `HistoryQueryRootRewriter` rewrites the marker to
+`historyRoot.Where(...).Select(h => new Policy {...}).AsNoTracking()`, `ExecuteUpdate`'s translator
+looks through the `Select` to the underlying table and emits a real `UPDATE ... policies_history ...`
+— it does **not** throw, and it does **not** touch the main table; it silently mutates the audit
+trail (confirmed for `AsOf()`, `AllVersions()`, and `History<T>()`, the last targeting a `Version<T>`
+member such as `Reason`). `ExecuteDelete` happens to be rejected by EF Core's own translator today
+("requires an entity type ... non-entity projection"), but that is an accident of the translator, not
+a guarantee, and inconsistent with `ExecuteUpdate` on the identical query shape. So Hindsight rejects
+all four (`ExecuteUpdate`/`ExecuteUpdateAsync`/`ExecuteDelete`/`ExecuteDeleteAsync`) itself, before any
+SQL can be generated: `IQueryExpressionInterceptor.QueryCompilationStarting` **is** invoked for the
+`ExecuteUpdate`/`ExecuteDelete` code path — confirmed by the same repro, since the tree it received
+already carried the outer `ExecuteUpdate`/`ExecuteDelete` call — so no new interception point was
+needed. `MarkerScanner` (`HindsightQueryExpressionInterceptor`) detects the same
+`EntityFrameworkQueryableExtensions.ExecuteUpdate`/`ExecuteUpdateAsync`/`ExecuteDelete`/`ExecuteDeleteAsync`
+methods anywhere in the tree, the same way it already detects `Include`/`AsTracking`, and throws
+`NotSupportedException` naming this section. Covered by `AsOf_with_ExecuteUpdate_throws_...` /
+`AllVersions_with_ExecuteDelete_throws_...` / `History_with_ExecuteUpdate_throws_...` (and their
+"writes nothing" companions) in the integration test suite.
+
 ## D8. `AsOf` + `Include` throws in v1
 
 It's an interval join on overlapping periods. A silently wrong answer is worse than no feature.
@@ -266,7 +289,8 @@ query cache is not busted per timestamp.
 replacement, differing only in how the history source is shaped: no period predicate, and
 `historyRoot.Where(operation <> 3).OrderByDescending(valid_from).Select(h => new Policy { ... }).AsNoTracking()`.
 The projection, the `AsNoTracking`, and every guard (first operator, non-temporal, `Include`,
-`AsTracking`, TPH, owned/complex) are shared with `AsOf` in `HistoryQueryRootRewriter`.
+`AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex) are shared with `AsOf` in
+`HistoryQueryRootRewriter`.
 - **Tombstone excluded (`operation <> 3`).** The delete tombstone (D5) carries the last column
   values before the delete but an empty interval `[ts, ts)`. Returned as a "version" it would be a
   data-duplicate of the final real version with `ValidFrom == ValidTo` — meaningless as a state
@@ -286,8 +310,9 @@ history source has **no filter at all** and is ordered
 `OrderByDescending(valid_from).ThenByDescending(history_id)`; the projection is a nested member-init
 `h => new Version<TEntity> { Entity = new TEntity { … }, ValidFrom = (DateTimeOffset)…, ValidTo = …,
 Operation = (VersionOperation)…, ChangedBy = …, … }`, then `AsNoTracking()`. Every guard (first
-operator, non-temporal, `Include`, `AsTracking`, TPH, owned/complex) and `BuildBindings` for the
-inner entity are shared with `AsOf` / `AllVersions` in `HistoryQueryRootRewriter`.
+operator, non-temporal, `Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex)
+and `BuildBindings` for the inner entity are shared with `AsOf` / `AllVersions` in
+`HistoryQueryRootRewriter`.
 - **Tombstone included.** This is the one place it should be: `History<T>()` is the audit view, and
   the `operation = 3` row carries *when* and *who* of a delete (D5). It comes back as a `Version`
   with `Operation == VersionOperation.Delete`, `ValidFrom == ValidTo` (empty interval) and

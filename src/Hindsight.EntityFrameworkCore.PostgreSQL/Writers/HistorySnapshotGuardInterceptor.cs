@@ -9,7 +9,7 @@ namespace Hindsight.Writers;
 /// instance handed out by <c>AsOf()</c> / <c>AllVersions()</c> / <c>History&lt;T&gt;()</c> (marked via
 /// <see cref="HistoryOrigin"/>) that is then re-attached — <c>Update</c>, <c>Attach</c>, <c>Add</c>,
 /// <c>Remove</c>, or a manual state change — and saved would silently write a stale snapshot back as
-/// the current version and generate spurious history (CLAUDE.md rule 2). This interceptor runs first
+/// the current version and generate spurious history. This interceptor runs first
 /// on <c>SaveChanges</c>, before the history writer, and throws
 /// <see cref="InvalidOperationException"/> if it finds such an instance being persisted.
 /// </summary>

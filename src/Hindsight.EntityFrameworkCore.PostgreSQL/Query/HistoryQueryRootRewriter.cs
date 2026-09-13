@@ -22,8 +22,8 @@ namespace Hindsight.Query;
 /// <c>new Version&lt;TEntity&gt; { Entity = new TEntity { … }, ValidFrom = …, Operation = …, … }</c>.</item>
 /// </list>
 /// The operators the caller put after the marker sit on top of that and translate normally
-/// (DESIGN.md D12). Uses only public EF Core API — no <c>Microsoft.EntityFrameworkCore.*.Internal</c>
-/// (CLAUDE.md rule 1).
+/// (DESIGN.md D12). Uses only public EF Core API — no <c>Microsoft.EntityFrameworkCore.*.Internal</c> —
+/// so this stays working across EF Core minor releases instead of breaking on an internal API change.
 /// </summary>
 internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 {
@@ -53,9 +53,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             && m.GetParameters().Length == 1);
 
     // The delete tombstone (DESIGN.md D5): operation = 3, empty interval [ts, ts). Not a state version.
-    // 'internal' rather than 'private' only to satisfy the repo's private-field naming rule, which
-    // expects a leading underscore.
-    internal const short DeleteOperation = 3;
+    private const short DeleteOperation = 3;
 
     // The AsNoTracking(...) node produced for each rewritten marker (by reference) -> the CLR type it
     // yields (TEntity for AsOf / AllVersions, Version<TEntity> for History<T>). Lets the caller
@@ -135,7 +133,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
                 + "from the model. This is a bug in Hindsight.");
 
         // Owned references and complex properties do not have columns on the history table, so a
-        // reconstructed entity would carry silent nulls for them (CLAUDE.md rule 2).
+        // reconstructed entity would carry silent nulls for them instead of their real values.
         if (sourceEntityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned())
             || sourceEntityType.GetComplexProperties().Any())
         {

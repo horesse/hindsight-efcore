@@ -59,7 +59,7 @@ public static class HindsightQueryableExtensions
 
         // Carry the instant as member access on a captured object, not Expression.Constant(asOf): EF
         // then treats it as a query parameter, so the compiled-query cache is shared across instants
-        // and the value lands in SQL as a parameter (.claude/rules/sql-and-migrations.md).
+        // and the value lands in SQL as a parameter, not a literal.
         var parameter = new AsOfParameter(asOf.UtcDateTime);
 
         return source.Provider.CreateQuery<TEntity>(

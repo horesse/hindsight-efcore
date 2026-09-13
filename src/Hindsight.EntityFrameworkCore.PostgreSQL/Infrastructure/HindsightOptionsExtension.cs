@@ -94,13 +94,9 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
     }
 
     // The name of the assembly Npgsql.EntityFrameworkCore.PostgreSQL registers its provider extension
-    // from. It is the same string DbContext.Database.ProviderName reports once a context built with
-    // UseNpgsql(...) exists (verified against Npgsql.EntityFrameworkCore.PostgreSQL 10.0.3) — Validate
-    // runs earlier than that, before a service provider exists to ask, so this reads the equivalent
-    // value straight off the extension's own declaring assembly instead. 'internal' rather than
-    // 'private' only to satisfy the repo's private-field naming rule, which expects a leading
-    // underscore.
-    internal const string NpgsqlProviderAssemblyName = "Npgsql.EntityFrameworkCore.PostgreSQL";
+    // from — see DESIGN.md D3 for why this, and not a cast to Npgsql's own extension type, is how
+    // Validate below identifies the provider.
+    private const string NpgsqlProviderAssemblyName = "Npgsql.EntityFrameworkCore.PostgreSQL";
 
     public void Validate(IDbContextOptions options)
     {

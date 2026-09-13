@@ -11,8 +11,7 @@ namespace Hindsight.Writers;
 /// Turns <see cref="PendingHistoryRow"/> values into parameterised SQL and runs it on the context's
 /// connection inside the current transaction. Identifiers go through
 /// <see cref="ISqlGenerationHelper"/> and values through each history column's
-/// <see cref="RelationalTypeMapping"/>; nothing is concatenated as a raw identifier
-/// (.claude/rules/sql-and-migrations.md).
+/// <see cref="RelationalTypeMapping"/>; nothing is concatenated as a raw identifier.
 /// <para>
 /// Every statement of one <c>SaveChanges</c> is sent in a single <see cref="DbBatch"/> — one network
 /// round-trip — instead of a <see cref="DbCommand"/> per statement. Rows are chunked at
@@ -33,16 +32,14 @@ namespace Hindsight.Writers;
 /// </summary>
 internal static class HistoryRowWriter
 {
-    // The current-version marker (DESIGN.md D5). 'internal' rather than 'private' only to satisfy the
-    // repo's private-field naming rule, which expects a leading underscore.
-    internal const string Infinity = "'infinity'::timestamptz";
+    // The current-version marker (DESIGN.md D5).
+    private const string Infinity = "'infinity'::timestamptz";
 
     // Each row is one statement carrying the versioned + 5 context + operation + timestamp parameters
     // and, for updates and deletes, the key parameters of the close CTE. 512 rows keeps even a very
     // wide entity an order of magnitude under the 65535-parameter Bind limit; a batch is one
-    // round-trip however many statements it carries. 'internal' rather than 'private', like
-    // <see cref="Infinity"/>, only to satisfy the repo's private-field naming rule.
-    internal const int RowsPerBatch = 512;
+    // round-trip however many statements it carries.
+    private const int RowsPerBatch = 512;
 
     public static void Write(
         DbContext context,

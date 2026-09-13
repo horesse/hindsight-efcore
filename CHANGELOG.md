@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-13
+
 ### Added
 
 - `tests/Hindsight.IntegrationTests/CustomInterceptorOrderingTests.cs`: an integration test pinning down
@@ -13,28 +15,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   Hindsight's own, so one that moves an entity from `Unchanged` to `Modified` inside its own
   `SavingChanges` writes no history row under `HistoryWriter.Interceptor` but does under
   `HistoryWriter.Trigger`. Documentation only; no behavior changed.
-
-### Changed
-
-- Documented the change-context trust model: `docs/articles/configuration.md` and
-  `docs/articles/history-writers.md` now state plainly that `changed_by` / `changed_by_name` /
-  `correlation_id` / `reason` / `extra` are application-asserted, not database-guaranteed — under
-  `HistoryWriter.Trigger` they round-trip through an unauthenticated `set_config`/`current_setting`
-  session setting that anything with an ordinary database connection can also set. This was always the
-  design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
-  comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D16 for the
-  open question this raised about an additional, database-guaranteed `session_user` column.
-- Documented what a plain `SaveChanges` retry does to a restored `Added` entity whose primary key is
-  store-generated: EF Core already wrote the database-generated value onto the entity from the
-  rolled-back transaction before the history write failed, and a retry sends that value back
-  explicitly. Confirmed against real PostgreSQL (`StoreGeneratedKeyRetryTests`) for both Npgsql
-  identity strategies — see
-  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
-  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
-  No code changed.
-
-### Added
-
 - `UseHindsight()` now validates that the context is configured with the Npgsql/PostgreSQL provider,
   the only one Hindsight supports (see
   [Limitations → Not in v1](docs/articles/limitations.md#not-in-v1)). The check runs the first time
@@ -64,6 +44,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   table or index but is a *silent* history corruption for the trigger function, which PostgreSQL simply
   replaces with no error. See [Model validation](docs/articles/configuration.md#model-validation). No
   new public API.
+
+### Changed
+
+- Documented the change-context trust model: `docs/articles/configuration.md` and
+  `docs/articles/history-writers.md` now state plainly that `changed_by` / `changed_by_name` /
+  `correlation_id` / `reason` / `extra` are application-asserted, not database-guaranteed — under
+  `HistoryWriter.Trigger` they round-trip through an unauthenticated `set_config`/`current_setting`
+  session setting that anything with an ordinary database connection can also set. This was always the
+  design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
+  comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D16 for the
+  open question this raised about an additional, database-guaranteed `session_user` column.
+- Documented what a plain `SaveChanges` retry does to a restored `Added` entity whose primary key is
+  store-generated: EF Core already wrote the database-generated value onto the entity from the
+  rolled-back transaction before the history write failed, and a retry sends that value back
+  explicitly. Confirmed against real PostgreSQL (`StoreGeneratedKeyRetryTests`) for both Npgsql
+  identity strategies — see
+  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
+  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+  No code changed.
+- Documentation: the recommendation to use `HistoryWriter.Trigger` in production is now called out
+  right after the `UseHindsight(...)` configuration sample in `README.md`, and at the top of
+  [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
+  table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
+  writer when `UseHistoryWriter(...)` is never called.
+- `SaveChanges` no longer runs a redundant full `ChangeTracker.DetectChanges()` pass over every tracked
+  entity — not just temporal ones — when `HistoryRowPlan.BuildPending` (`HistoryWriter.Interceptor`) or
+  `HistoryTriggerContextInterceptor.HasTemporalChange` (`HistoryWriter.Trigger`) call
+  `ChangeTracker.Entries()`. `HistorySnapshotGuardInterceptor.Guard` already walks `Entries()` earlier
+  in the same `SaveChanges`, and with `AutoDetectChangesEnabled` on (the default) that call already ran
+  the one `DetectChanges()` pass needed; nothing mutates a tracked entity's properties between the two
+  calls. The second call now temporarily disables `AutoDetectChangesEnabled` around its own walk and
+  reuses `Guard`'s result instead of re-scanning. No behavior change for correctness — only measured on
+  a context that also tracks many untouched entities alongside the one that actually changed, where
+  managed allocations drop by roughly a third (about 32% at 10,000 tracked-but-unchanged entities, both
+  writer modes) — see [History writers → Tracked-but-unchanged entities](docs/articles/history-writers.md#tracked-but-unchanged-entities).
 
 ### Fixed
 
@@ -198,25 +213,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   opens the transaction (the common case — no explicit transaction, no ambient scope), each
   `SaveChanges` still gets its own transaction and the skip-`set_config` optimization is unaffected. No
   public API change.
-
-### Changed
-
-- Documentation: the recommendation to use `HistoryWriter.Trigger` in production is now called out
-  right after the `UseHindsight(...)` configuration sample in `README.md`, and at the top of
-  [History writers](docs/articles/history-writers.md), instead of only inside the writer comparison
-  table further down each page. No behavior changed — `HistoryWriter.Interceptor` remains the default
-  writer when `UseHistoryWriter(...)` is never called.
-- `SaveChanges` no longer runs a redundant full `ChangeTracker.DetectChanges()` pass over every tracked
-  entity — not just temporal ones — when `HistoryRowPlan.BuildPending` (`HistoryWriter.Interceptor`) or
-  `HistoryTriggerContextInterceptor.HasTemporalChange` (`HistoryWriter.Trigger`) call
-  `ChangeTracker.Entries()`. `HistorySnapshotGuardInterceptor.Guard` already walks `Entries()` earlier
-  in the same `SaveChanges`, and with `AutoDetectChangesEnabled` on (the default) that call already ran
-  the one `DetectChanges()` pass needed; nothing mutates a tracked entity's properties between the two
-  calls. The second call now temporarily disables `AutoDetectChangesEnabled` around its own walk and
-  reuses `Guard`'s result instead of re-scanning. No behavior change for correctness — only measured on
-  a context that also tracks many untouched entities alongside the one that actually changed, where
-  managed allocations drop by roughly a third (about 32% at 10,000 tracked-but-unchanged entities, both
-  writer modes) — see [History writers → Tracked-but-unchanged entities](docs/articles/history-writers.md#tracked-but-unchanged-entities).
 
 ## [1.0.0] - 2026-09-11
 

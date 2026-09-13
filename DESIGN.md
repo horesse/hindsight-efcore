@@ -629,11 +629,34 @@ operation's *new* (schema, name) is a live trigger model's history table or main
   by the relation's OID, not its name), and the function body never names the main table at all (only
   `NEW` / `OLD`), so a write through the renamed table succeeds with zero additional DDL.
 
+**The period-range index (D5) also needs an explicit rename, in both writer modes.** Found by a
+code-review hypothesis and confirmed against real PostgreSQL before writing any fix: `ALTER TABLE ...
+RENAME` renames only the relation, never the objects built on it — an index created as
+`ix_<old_history_table>_period` keeps that literal name after its table is renamed out from under it.
+This is unrelated to whether `HistoryWriter` is `Trigger` or `Interceptor`: the index exists in both
+modes (D5), so it goes stale in both. Left alone, two problems follow: the index's name silently falls
+out of sync with `HistoryIndexSqlGenerator.IndexName`'s convention, and — the concrete failure mode —
+the freed-up old name becomes a landmine for the next temporal entity whose default-derived history
+table name happens to collide with it, whose own `CREATE INDEX ix_<that name>_period` then fails with
+`relation "ix_<name>_period" already exists`. `HindsightMigrationsSqlGenerator.Rewrite` now detects a
+history-table rename by matching the operation's new (schema, name) against the *index* model
+dictionary (built for every history table regardless of writer, unlike the trigger model dictionary,
+which is empty outside `HistoryWriter.Trigger`) and emits an `ALTER INDEX ... RENAME TO ...` for it —
+the one part of this rename that is genuinely writer-mode-independent, alongside the Trigger-mode
+function/trigger recreation described above. (The ordinary, EF-tracked `ix_<history_table>_version`
+index needs no such handling: it is a first-class model index, not raw SQL, so EF Core's own differ
+already emits its `RenameIndexOperation` — this only affects the hand-rolled GiST expression index,
+which EF's fluent API cannot represent and which `HistoryIndexSqlGenerator` therefore builds as pure
+SQL, invisible to the differ.)
+
 Covered by `TableRenameTriggerDdlTests` (Testcontainers: a main-table rename with default history
 naming — asserts both `RenameTableOperation`s, that no `CreateTable`/`DropTable` appears, and that
 history continues under the new name with no gap across the rename; a history-only rename via
 `UseHistoryTable`; a main-table rename with a fixed history name, asserting no function/trigger DDL is
-emitted at all) and the existing `HistoryEntityTypeConventionTests` / `OrphanedHistoryColumnTests` /
+emitted at all; a history-table rename in both writer modes, asserting the period-range index's name
+before and after the rename via `pg_indexes`, plus a regression that a later, unrelated temporal entity
+whose default history table name collides with the freed-up old name still migrates cleanly) and the
+existing `HistoryEntityTypeConventionTests` / `OrphanedHistoryColumnTests` /
 `OrphanedHistoryTriggerTests` (updated to resolve a temporal entity's history entity type through its
 `Hindsight:HistoryEntityType` annotation — the same idiom production code already used — rather than
 assuming the identity equals the table name, which was only ever true by construction, not by

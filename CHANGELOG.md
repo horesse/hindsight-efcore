@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- `tests/Hindsight.IntegrationTests/CustomInterceptorOrderingTests.cs`: an integration test pinning down
+  the ordering claim in [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) —
+  a `SaveChangesInterceptor` added with `optionsBuilder.AddInterceptors(...)` always runs after
+  Hindsight's own, so one that moves an entity from `Unchanged` to `Modified` inside its own
+  `SavingChanges` writes no history row under `HistoryWriter.Interceptor` but does under
+  `HistoryWriter.Trigger`. Documentation only; no behavior changed.
+
 ### Changed
 
 - Documented the change-context trust model: `docs/articles/configuration.md` and
@@ -15,6 +24,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
   comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D16 for the
   open question this raised about an additional, database-guaranteed `session_user` column.
+- Documented what a plain `SaveChanges` retry does to a restored `Added` entity whose primary key is
+  store-generated: EF Core already wrote the database-generated value onto the entity from the
+  rolled-back transaction before the history write failed, and a retry sends that value back
+  explicitly. Confirmed against real PostgreSQL (`StoreGeneratedKeyRetryTests`) for both Npgsql
+  identity strategies — see
+  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
+  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+  No code changed.
 
 ### Added
 
@@ -123,6 +140,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   [Schema evolution → Renaming the main table or the history table](docs/articles/schema-evolution.md#renaming-the-main-table-or-the-history-table)
   and DESIGN.md D15. Existing deployments are unaffected unless they actually rename something: no new
   public API, and upgrading Hindsight alone produces no migration diff.
+- Renaming a history table now also renames its period-range index (`ix_<history_table>_period`), in
+  both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `ALTER TABLE ... RENAME` renames
+  only the table — confirmed against real PostgreSQL — so the index previously kept its old, literal
+  name after the rename, silently out of sync with the table it indexes. Left alone, this could also
+  fail a later, unrelated migration outright: a different temporal entity whose default-derived history
+  table name happened to match the freed-up old name would have its own `CREATE INDEX` collide with the
+  stale one and fail with "relation ... already exists". No new public API.
 - `HistoryWriter.Interceptor`: when the history write itself fails after a successful data write (for
   example, invalid `ChangeContext.Extra` JSON, or a transient connection failure between the data write
   and the history write), the transaction still rolls back both writes together as before, but `Added`

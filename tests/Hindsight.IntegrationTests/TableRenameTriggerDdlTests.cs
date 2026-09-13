@@ -174,6 +174,85 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         Assert.Equal([1, 3], rows.Select(r => r.Operation));
     }
 
+    [Theory]
+    [InlineData(HistoryWriter.Trigger)]
+    [InlineData(HistoryWriter.Interceptor)]
+    public async Task Renaming_history_table_renames_period_index(HistoryWriter writer)
+    {
+        var cs = await postgres.CreateDatabaseAsync(
+            $"{nameof(Renaming_history_table_renames_period_index)}_{writer}", Ct);
+
+        await using var v1 = Build(mainTable: "policies", historyTable: "policy_history_v1", writer: writer);
+        var v1Model = v1.GetService<IDesignTimeModel>().Model;
+        await ApplySchemaAsync(v1, cs);
+
+        await using (var conn = new NpgsqlConnection(cs))
+        {
+            await conn.OpenAsync(Ct);
+            var before = await ScalarAsync(conn,
+                "select count(*) from pg_indexes where indexname = 'ix_policy_history_v1_period' and tablename = 'policy_history_v1'");
+            Assert.Equal(1L, before);
+        }
+
+        await using var v2 = Build(
+            mainTable: "policies", historyTable: "policy_history_v2", snapshotModel: v1Model, writer: writer);
+        var v2Model = v2.GetService<IDesignTimeModel>().Model;
+
+        var operations = v2.GetService<IMigrationsModelDiffer>().GetDifferences(
+            v1Model.GetRelationalModel(), v2Model.GetRelationalModel());
+        var commands = v2.GetService<IMigrationsSqlGenerator>().Generate(operations, v2Model);
+
+        // The index rename is emitted as its own ALTER INDEX regardless of writer mode: PostgreSQL's
+        // ALTER TABLE ... RENAME does not carry the index's name along with the table (DESIGN.md D15),
+        // unlike the trigger, which PostgreSQL does keep attached by OID.
+        Assert.Contains(commands, c => c.CommandText.StartsWith("ALTER INDEX", StringComparison.Ordinal)
+            && c.CommandText.Contains("ix_policy_history_v1_period", StringComparison.Ordinal)
+            && c.CommandText.Contains("ix_policy_history_v2_period", StringComparison.Ordinal));
+
+        await using var apply = new NpgsqlConnection(cs);
+        await apply.OpenAsync(Ct);
+        foreach (var command in commands)
+        {
+            await ExecAsync(apply, command.CommandText);
+        }
+
+        var oldIndexAnywhere = await ScalarAsync(apply,
+            "select count(*) from pg_indexes where indexname = 'ix_policy_history_v1_period'");
+        Assert.Equal(0L, oldIndexAnywhere);
+
+        var newIndex = await ScalarAsync(apply,
+            "select count(*) from pg_indexes where indexname = 'ix_policy_history_v2_period' and tablename = 'policy_history_v2'");
+        Assert.Equal(1L, newIndex);
+
+        // Regression: the old index name is now free. A later, unrelated temporal entity whose
+        // default-derived history table happens to collide with it must still migrate cleanly instead
+        // of failing CREATE INDEX with "relation ... already exists".
+        await using var collision = BuildCollisionContext(cs, writer);
+        var collisionModel = collision.GetService<IDesignTimeModel>().Model;
+        var collisionOperations = collision.GetService<IMigrationsModelDiffer>().GetDifferences(
+            null, collisionModel.GetRelationalModel());
+        var collisionCommands = collision.GetService<IMigrationsSqlGenerator>().Generate(collisionOperations, collisionModel);
+
+        foreach (var command in collisionCommands)
+        {
+            await ExecAsync(apply, command.CommandText);
+        }
+
+        var collisionIndex = await ScalarAsync(apply,
+            "select count(*) from pg_indexes where indexname = 'ix_policy_history_v1_period' and tablename = 'policy_history_v1'");
+        Assert.Equal(1L, collisionIndex);
+    }
+
+    private static CollisionContext BuildCollisionContext(string connectionString, HistoryWriter writer)
+    {
+        var builder = new DbContextOptionsBuilder<CollisionContext>()
+            .UseNpgsql(connectionString)
+            .EnableServiceProviderCaching(false)
+            .UseHindsight(h => h.UseHistoryWriter(writer));
+
+        return new CollisionContext(builder.Options);
+    }
+
     private static string HistoryTableName(IModel model, Type sourceClrType)
     {
         var source = model.FindEntityType(sourceClrType)!;
@@ -234,7 +313,11 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
     }
 
     private static RenameContext Build(
-        string mainTable, string? historyTable, string? connectionString = null, IModel? snapshotModel = null)
+        string mainTable,
+        string? historyTable,
+        string? connectionString = null,
+        IModel? snapshotModel = null,
+        HistoryWriter writer = HistoryWriter.Trigger)
     {
         var builder = new DbContextOptionsBuilder<RenameContext>()
             .UseNpgsql(connectionString ?? "Host=localhost;Database=unused")
@@ -245,9 +328,9 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
             // twenty service providers" cap.
             .EnableServiceProviderCaching(false)
             .ReplaceService<IModelCacheKeyFactory, RenameAwareModelCacheKeyFactory>()
-            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger));
+            .UseHindsight(h => h.UseHistoryWriter(writer));
 
-        return new RenameContext(builder.Options, mainTable, historyTable, snapshotModel);
+        return new RenameContext(builder.Options, mainTable, historyTable, snapshotModel, writer);
     }
 
     private sealed record HistoryRow(DateTime ValidFrom, DateTime ValidTo, short Operation);
@@ -263,17 +346,23 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
         public object Create(DbContext context, bool designTime)
         {
             var ctx = (RenameContext)context;
-            return (context.GetType(), ctx.MainTable, ctx.HistoryTable, designTime);
+            return (context.GetType(), ctx.MainTable, ctx.HistoryTable, ctx.Writer, designTime);
         }
     }
 
     private sealed class RenameContext(
-        DbContextOptions<RenameContext> options, string mainTable, string? historyTable, IModel? snapshotModel = null)
+        DbContextOptions<RenameContext> options,
+        string mainTable,
+        string? historyTable,
+        IModel? snapshotModel = null,
+        HistoryWriter writer = HistoryWriter.Trigger)
         : DbContext(options)
     {
         public string MainTable => mainTable;
 
         public string? HistoryTable => historyTable;
+
+        public HistoryWriter Writer => writer;
 
         public DbSet<Policy> Policies => Set<Policy>();
 
@@ -330,6 +419,28 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
 
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
+        }
+    }
+
+    // An unrelated temporal entity, added from scratch (no snapshot, no prior migration) against a
+    // database that already has "policy_history_v1" freed up by a rename. Its history table is pinned,
+    // via UseHistoryTable, to that exact freed name — the collision DESIGN.md D15 warns about if the
+    // period-range index is left under its stale name instead of being renamed along with the table.
+    private sealed class Endorsement
+    {
+        public int Id { get; set; }
+    }
+
+    private sealed class CollisionContext(DbContextOptions<CollisionContext> options) : DbContext(options)
+    {
+        public DbSet<Endorsement> Endorsements => Set<Endorsement>();
+
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var endorsement = modelBuilder.Entity<Endorsement>();
+            endorsement.ToTable("endorsements");
+            endorsement.Property(e => e.Id).HasColumnName("id").ValueGeneratedNever();
+            endorsement.IsTemporal(t => t.UseHistoryTable("policy_history_v1"));
         }
     }
 }

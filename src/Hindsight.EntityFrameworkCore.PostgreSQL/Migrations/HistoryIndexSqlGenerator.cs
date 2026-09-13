@@ -55,4 +55,27 @@ internal static class HistoryIndexSqlGenerator
 
         return $"CREATE INDEX {index} ON {table} USING gist (tstzrange({validFrom}, {validTo}));";
     }
+
+    /// <summary>
+    /// <c>ALTER INDEX ix_&lt;old_history_table&gt;_period RENAME TO ix_&lt;new_history_table&gt;_period</c>.
+    /// Emitted whenever a history table itself is renamed (DESIGN.md D15): PostgreSQL's
+    /// <c>ALTER TABLE ... RENAME</c> renames the relation only — verified against real PostgreSQL — so an
+    /// index created as <c>ix_&lt;old_name&gt;_period</c> keeps that literal name after its table is
+    /// renamed out from under it. Left alone, the index's name silently falls out of sync with
+    /// <see cref="IndexName"/>, and the freed-up old name becomes a landmine: a later temporal entity
+    /// whose default-derived history table name happens to match it would fail its own
+    /// <c>CREATE INDEX ix_&lt;old_name&gt;_period</c> with "relation already exists".
+    /// </summary>
+    public static string RenamePeriodRangeIndex(
+        string oldHistoryTable, string? oldHistorySchema, string newHistoryTable, ISqlGenerationHelper sql)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(oldHistoryTable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newHistoryTable);
+        ArgumentNullException.ThrowIfNull(sql);
+
+        var oldIndex = sql.DelimitIdentifier(IndexName(oldHistoryTable), oldHistorySchema);
+        var newIndex = sql.DelimitIdentifier(IndexName(newHistoryTable));
+
+        return $"ALTER INDEX {oldIndex} RENAME TO {newIndex};";
+    }
 }

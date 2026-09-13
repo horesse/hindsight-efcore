@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- `tests/Hindsight.IntegrationTests/CustomInterceptorOrderingTests.cs`: an integration test pinning down
+  the ordering claim in [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) —
+  a `SaveChangesInterceptor` added with `optionsBuilder.AddInterceptors(...)` always runs after
+  Hindsight's own, so one that moves an entity from `Unchanged` to `Modified` inside its own
+  `SavingChanges` writes no history row under `HistoryWriter.Interceptor` but does under
+  `HistoryWriter.Trigger`. Documentation only; no behavior changed.
+
 ### Changed
 
 - Documented the change-context trust model: `docs/articles/configuration.md` and
@@ -15,6 +24,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
   comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D16 for the
   open question this raised about an additional, database-guaranteed `session_user` column.
+- Documented what a plain `SaveChanges` retry does to a restored `Added` entity whose primary key is
+  store-generated: EF Core already wrote the database-generated value onto the entity from the
+  rolled-back transaction before the history write failed, and a retry sends that value back
+  explicitly. Confirmed against real PostgreSQL (`StoreGeneratedKeyRetryTests`) for both Npgsql
+  identity strategies — see
+  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
+  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+  No code changed.
 
 ### Added
 

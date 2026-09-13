@@ -9,7 +9,7 @@ namespace Hindsight.IntegrationTests;
 /// <c>DbContextOptions</c> instance once, so <c>CoreOptionsExtension.ApplicationServiceProvider</c> is
 /// whichever provider was active at that moment — normally the application's root container, never a
 /// request's scope (confirmed empirically against EF Core 10.0.12; see the "Pooled and factory-created
-/// contexts" section of docs/articles/configuration.md). These tests reproduce exactly that condition —
+/// contexts" section of docs/writing/change-context.md). These tests reproduce exactly that condition —
 /// a real root <see cref="ServiceProvider"/>, handed to every <see cref="DbContext"/> instance through
 /// <c>UseApplicationServiceProvider</c>, exactly like the shared options template every pooled or
 /// factory-created context carries — without needing a real ASP.NET Core host or reflection on
@@ -38,7 +38,7 @@ public sealed class PooledContextChangeContextTests(PostgresFixture postgres)
         // Simulates ServiceProviderOptions.ValidateScopes = true (ASP.NET Core's Development default):
         // the DbContextPool<T>/DbContextFactory<T> captured the ROOT container as
         // ApplicationServiceProvider, but ScopedProvider is registered Scoped — the exact trap the
-        // "Pooled and factory-created contexts" section of docs/articles/configuration.md warns about.
+        // "Pooled and factory-created contexts" section of docs/writing/change-context.md warns about.
         var services = new ServiceCollection();
         services.AddScoped<ScopedProvider>();
         await using var root = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });

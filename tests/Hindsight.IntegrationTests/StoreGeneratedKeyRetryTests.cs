@@ -11,7 +11,7 @@ namespace Hindsight.IntegrationTests;
 /// has already propagated a real, database-generated value onto the entity's store-generated key
 /// property — from the transaction that then rolled back. These tests pin down what a retried
 /// <c>SaveChanges</c> does with that stale-but-real key value under each Npgsql identity strategy;
-/// see [Limitations → Known trade-offs](../../docs/articles/limitations.md#known-trade-offs).
+/// see [Limitations → Known trade-offs](../../docs/reference/limitations.md#known-trade-offs).
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class StoreGeneratedKeyRetryTests(PostgresFixture postgres)

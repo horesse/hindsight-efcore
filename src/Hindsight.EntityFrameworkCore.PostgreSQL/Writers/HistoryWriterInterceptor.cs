@@ -280,7 +280,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // Added/Modified/Deleted left to save, and do nothing. Restoring the pre-accept EntityState here
     // makes a retry actually retry. A Deleted row's Entry is deliberately null (PendingHistoryRow) —
     // its entry was already detached by AcceptAllChanges and there is nothing left in the tracker to
-    // re-mark; that case is a documented caveat (docs/articles/limitations.md), not fixed here.
+    // re-mark; that case is a documented caveat (docs/reference/limitations.md), not fixed here.
     private static void RestoreEntityStates(IReadOnlyList<PendingHistoryRow> rows)
     {
         foreach (var row in rows)

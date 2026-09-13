@@ -7,8 +7,10 @@
     <File Path="global.json" />
     <File Path="README.md" />
     <File Path="DESIGN.md" />
-    <File Path="CHANGELOG.md" />
     <File Path="CLAUDE.md" />
+  </Folder>
+  <Folder Name="/docs/">
+    <Project Path="docs/snippets/Hindsight.Docs.Snippets.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />

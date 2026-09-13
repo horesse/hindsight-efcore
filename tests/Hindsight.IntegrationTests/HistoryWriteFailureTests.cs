@@ -104,7 +104,7 @@ public sealed class HistoryWriteFailureTests(PostgresFixture postgres)
         Assert.Equal(1, await CountAsync(h.ConnectionString, "policies"));
         Assert.Equal(1, await CountAsync(h.ConnectionString, "policies_history"));
 
-        // Documented sharp edge (docs/articles/limitations.md): EF Core's AcceptAllChanges already
+        // Documented sharp edge (docs/reference/limitations.md): EF Core's AcceptAllChanges already
         // detached the entry for a Deleted row before SavedChanges ran, and PendingHistoryRow never
         // kept an EntityEntry for a delete (its values are captured up front) — there is nothing to
         // re-mark. The entity is unrecoverably gone from the tracker even though the row survives in

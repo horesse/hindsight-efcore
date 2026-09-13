@@ -49,7 +49,7 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
   `System.Transactions.Transaction.Current` (public API) and opens the connection explicitly instead,
   so Npgsql enlists it in the ambient transaction and every command from here on — the data write, the
   history `INSERT`, the trigger writer's `set_config` push — rides that enlistment with no separate
-  `DbTransaction`; commit/rollback is then the ambient scope's job (`docs/articles/configuration.md` →
+  `DbTransaction`; commit/rollback is then the ambient scope's job (`docs/writing/transactions.md` →
   Ambient TransactionScope). In `SavedChanges` — after the batch, so store-generated keys are known — it re-reads current
   values for `Added`/`Modified` and writes the history rows on the same connection and transaction
   via parameterised SQL (`ISqlGenerationHelper` for identifiers, each history column's
@@ -123,7 +123,7 @@ singleton from a legitimately-already-constructed scoped instance, and `Hindsigh
 runs before a service provider necessarily exists to inspect. Fixed the loud half only: the
 `InvalidOperationException` from that resolution call is now wrapped with a Hindsight-specific message
 naming the provider and the fix, instead of forwarding ASP.NET Core's generic one. The silent half is
-a hard constraint, documented instead — see `docs/articles/configuration.md` → Pooled and
+a hard constraint, documented instead — see `docs/writing/change-context.md` → Pooled and
 factory-created contexts for the safe pattern (a singleton provider reading per-request ambient state,
 e.g. `IHttpContextAccessor`, fresh inside `GetChangeContext`).
 
@@ -617,9 +617,9 @@ operation's *new* (schema, name) is a live trigger model's history table or main
   Recreating it is deferred until *after* every operation in the migration has been emitted, not done
   in place right after the `RenameTableOperation`: when the same migration also renames the main table
   (the default-suffix-naming case, since both names derive from the same source and rename together),
-  that rename's own operation can appear *later* in the list, and emitting `CREATE TRIGGER ... ON
-  <main table>` before that later rename has run would name a table that does not exist yet under that
-  name. Deferring to the end (the same place `needsRefresh` already replays column-driven
+  that rename's own operation can appear *later* in the list, and emitting
+  `CREATE TRIGGER ... ON <main table>` before that later rename has run would name a table that does
+  not exist yet under that name. Deferring to the end (the same place `needsRefresh` already replays column-driven
   `CREATE OR REPLACE FUNCTION`s) guarantees every rename in the migration has already executed. Found
   by writing the naive in-place version first and watching it fail against real PostgreSQL with
   `relation "policies2" does not exist` — exactly the failure the fix now avoids.
@@ -669,7 +669,7 @@ identity change is.
 
 ## D16. Change-context trust model, and a proposed `session_user` audit column — open question
 
-**Documented, 2026-09-12** (see `docs/articles/configuration.md` → Trust model): the change-context
+**Documented, 2026-09-12** (see `docs/writing/change-context.md` → Trust model): the change-context
 columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) are not tamper-resistant
 against anything with an ordinary database connection. Under `HistoryWriter.Trigger` in particular,
 they round-trip through `set_config('hindsight.*', ..., true)` / `current_setting(...)` — a
@@ -776,7 +776,7 @@ Per CLAUDE.md rule 9, this stays an open question pending a maintainer decision 
 
 Not decided. `HistoryWriter.Interceptor` is `= 0` and therefore what `UseHindsight()` gives a caller
 who never calls `UseHistoryWriter(...)` — see `Infrastructure/HindsightOptionsExtension.cs`. D3
-already recommends `Trigger` in production and README/`docs/articles/history-writers.md` say so too,
+already recommends `Trigger` in production and README/`docs/writing/history-writers.md` say so too,
 but the silent default is still the structurally weaker writer.
 
 **The case for switching.** `Trigger` has no known correctness gap versus `Interceptor`: it is immune
@@ -793,7 +793,7 @@ PostgreSQL setups and some organizations' database-permission policies do not gr
 role `CREATE FUNCTION` / `CREATE TRIGGER`, only `SELECT`/`INSERT`/`UPDATE`/`DELETE` on specific tables.
 For those callers, `Trigger` is not just non-default, it is unusable, and a default flip would turn
 `UseHindsight()` alone into a runtime failure on `dotnet ef migrations add` (a `CREATE FUNCTION` the
-role can't execute) for anyone in that position who upgrades without reading the changelog.
+role can't execute) for anyone in that position who upgrades without reading the release notes.
 
 **The migration path this needs, if we do it.** Flipping the default is a breaking behavior change
 (D11: MinVer semver from git tags), and it is not just a code default — an existing 1.x user who
@@ -801,8 +801,8 @@ upgrades to 2.0 with no explicit `UseHistoryWriter(...)` call would silently: (a
 `now()` timestamps instead of `TimeProvider` ones (breaks any test or code that reasoned about
 injected time), and (b) get trigger DDL — `CREATE FUNCTION` / `CREATE TRIGGER` — injected into their
 *next* `dotnet ef migrations add`, which they did not ask for and which may fail outright if their
-migration role lacks the privilege. A bare "default changed" line in `CHANGELOG.md` is not enough.
-The 2.0 upgrade guide needs its own migration-path section spelling out, roughly: "2.0 changes the
+migration role lacks the privilege. A bare "default changed" line in the release notes is not enough.
+The 2.0 upgrade guide (`docs/reference/upgrading.md`) needs its own migration-path section spelling out, roughly: "2.0 changes the
 default `HistoryWriter` from `Interceptor` to `Trigger`. If you never called `UseHistoryWriter(...)`
 explicitly, upgrading will change your history's timestamp source from `TimeProvider` to `now()` and
 add trigger DDL to your next migration. If you need to defer this — including if your database role

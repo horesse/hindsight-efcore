@@ -5,7 +5,7 @@ using Npgsql;
 namespace Hindsight.IntegrationTests;
 
 /// <summary>
-/// Pins down the ordering claim in docs/articles/limitations.md → Known trade-offs: a
+/// Pins down the ordering claim in docs/reference/limitations.md → Known trade-offs: a
 /// <see cref="SaveChangesInterceptor"/> added with <c>optionsBuilder.AddInterceptors(...)</c> always
 /// runs after Hindsight's own (<c>HindsightOptionsExtension</c> registers
 /// <c>HistorySnapshotGuardInterceptor</c> and the history writer through <c>ApplyServices</c>, ahead of
@@ -127,7 +127,7 @@ public sealed class CustomInterceptorOrderingTests(PostgresFixture postgres)
         }
     }
 
-    // The audit-stamp footgun from docs/articles/limitations.md: a SaveChangesInterceptor that reacts
+    // The audit-stamp footgun from docs/reference/limitations.md: a SaveChangesInterceptor that reacts
     // to some out-of-band signal (here, simply "this Policy is tracked") by moving an Unchanged entity
     // to Modified from inside its own SavingChanges — after Hindsight's SavingChanges handlers, added
     // first through HindsightOptionsExtension.ApplyServices, have already run and taken their snapshot.

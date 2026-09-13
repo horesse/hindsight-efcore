@@ -1,60 +1,171 @@
 name: Docs
 
-# Builds the DocFX site and publishes it to GitHub Pages on every push to master.
-# One-time setup: Repository → Settings → Pages → Source: "GitHub Actions".
+# Builds the VitePress site (docs/) and publishes it as one *version* of the documentation to the
+# gh-pages branch, which GitHub Pages serves as-is:
+#
+#   push to master     → /nightly/       unreleased changes; every merged PR lands here
+#   release.yml        → /MAJOR.MINOR/   a stable vX.Y.Z tag, once the package is on NuGet;
+#                                        a patch release republishes its minor
+#   manual run         → any version from any ref: the first publish of a version, or a fix to a
+#                                        released version from its release/X.Y branch
+#
+# docs/README.md → Versions explains the model; docs/scripts/publish-version.mjs the gh-pages layout.
+# One-time setup: Settings → Pages → Source: "Deploy from a branch", branch gh-pages, folder / (root).
 
 on:
   push:
     branches: [master]
     paths:
       - "docs/**"
-      - "src/**"
       - "DESIGN.md"
+      - "samples/InsuranceSample/**"
+      - "tests/**/*.verified.sql"
       - ".github/workflows/docs.yml"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Stable release tag (vX.Y.Z), published as version X.Y"
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build: a branch, tag or commit (e.g. master, release/1.1)"
+        required: true
+        default: master
+      version:
+        description: "Publish as: 'nightly' or MAJOR.MINOR (e.g. 1.1)"
+        required: true
+        default: nightly
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOCS_SITE_ROOT: /hindsight-efcore/
 
 jobs:
   build:
+    name: Build
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.target.outputs.version }}
+      label: ${{ steps.target.outputs.label }}
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
+      - name: Resolve the version to publish
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ inputs.tag }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$TAG" ]; then
+            # Called by release.yml. Only stable releases get a documentation version.
+            if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+              echo "::error::'$TAG' is not a stable vX.Y.Z tag; a preview's documentation is nightly."
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"; checkout=$TAG; label=$TAG
+          elif [ "$EVENT" = workflow_dispatch ]; then
+            if [[ ! "$INPUT_VERSION" =~ ^(nightly|[0-9]+\.[0-9]+)$ ]]; then
+              echo "::error::version must be 'nightly' or MAJOR.MINOR (e.g. 1.1), got '$INPUT_VERSION'."
+              exit 1
+            fi
+            if [[ "$INPUT_REF" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+ ]] && [ "$INPUT_VERSION" != "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}" ]; then
+              echo "::error::tag '$INPUT_REF' documents version ${BASH_REMATCH[1]}.${BASH_REMATCH[2]}, not '$INPUT_VERSION'."
+              exit 1
+            fi
+            version=$INPUT_VERSION; checkout=$INPUT_REF; label=$INPUT_REF
+          else
+            version=nightly; checkout=$GITHUB_SHA; label=$GITHUB_REF_NAME
+          fi
+          {
+            echo "version=$version"
+            echo "checkout=$checkout"
+            echo "label=$label"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-dotnet@v6
         with:
-          global-json-file: global.json
+          ref: ${{ steps.target.outputs.checkout }}
+          persist-credentials: false
 
-      - name: Restore tools
-        run: dotnet tool restore
+      - name: Check the ref has the VitePress site
+        id: commit
+        env:
+          LABEL: ${{ steps.target.outputs.label }}
+        run: |
+          if [ ! -f docs/package.json ]; then
+            echo "::error::'$LABEL' predates the VitePress docs site (no docs/package.json). Build a ref that has it."
+            exit 1
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build library (DocFX needs compiled metadata)
-        run: dotnet build src/Hindsight.EntityFrameworkCore.PostgreSQL --configuration Release
-
-      - name: Build site
-        run: dotnet docfx docs/docfx.json --warningsAsErrors
-
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/setup-node@v7
         with:
-          path: docs/_site
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
-  deploy:
+      - name: Install
+        run: npm ci
+        working-directory: docs
+
+      - name: Build
+        run: npm run build
+        working-directory: docs
+        env:
+          DOCS_VERSION: ${{ steps.target.outputs.version }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-site
+          path: docs/.vitepress/dist
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ needs.build.outputs.version }}
     needs: build
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: write # push to gh-pages
+    # One publish per version at a time; a newer nightly replaces a queued one. Different versions may
+    # publish concurrently: publish-gh-pages.sh settles that with a compare-and-swap push.
+    concurrency:
+      group: docs-publish-${{ needs.build.outputs.version }}
+      cancel-in-progress: false
     steps:
-      - id: deployment
-        uses: actions/deploy-pages@v5
+      # The publishing scripts come from this workflow's own commit, not from the ref being built, so
+      # every version is published by the same code that wrote the rest of gh-pages.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: docs/scripts
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-site
+          path: site-build
+
+      - name: Publish to gh-pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          LABEL: ${{ needs.build.outputs.label }}
+          SHA: ${{ needs.build.outputs.sha }}
+        run: bash docs/scripts/publish-gh-pages.sh site-build "$VERSION" "$LABEL" "$SHA"
+
+      - name: Summary
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          LABEL: ${{ needs.build.outputs.label }}
+        run: |
+          url="https://${GITHUB_REPOSITORY_OWNER}.github.io${DOCS_SITE_ROOT}${VERSION}/"
+          echo "Published docs version **${VERSION}** from \`${LABEL}\`: ${url}" >> "$GITHUB_STEP_SUMMARY"

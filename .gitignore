@@ -29,8 +29,3 @@ Thumbs.db
 *.env
 .env.*
 !.env.example
-
-# DocFX
-docs/_site/
-docs/api/*.yml
-docs/api/.manifest

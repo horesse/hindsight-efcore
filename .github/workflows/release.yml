@@ -2,7 +2,8 @@ name: Release
 
 # Triggered by publishing a GitHub Release whose tag is `vX.Y.Z` or `vX.Y.Z-preview.N`.
 # MinVer derives the package version from that tag, so the release tag IS the version —
-# nothing to edit in csproj files.
+# nothing to edit in csproj files. The release notes are the draft Release Drafter keeps from merged
+# PR titles. After the push, a stable release also publishes its documentation version (docs.yml).
 #
 # Publishing uses nuget.org Trusted Publishing (OIDC) — no long-lived API key anywhere.
 # One-time setup:
@@ -86,3 +87,15 @@ jobs:
         run: gh release upload '${{ github.event.release.tag_name }}' artifacts/*.nupkg artifacts/*.snupkg --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+
+  docs:
+    name: Publish docs
+    needs: publish
+    # Stable releases get a documentation version (vX.Y.Z → /X.Y/), once the package is on NuGet.
+    # A preview's documentation is the nightly one.
+    if: ${{ !github.event.release.prerelease && !contains(github.event.release.tag_name, '-') }}
+    uses: ./.github/workflows/docs.yml
+    with:
+      tag: ${{ github.event.release.tag_name }}
+    permissions:
+      contents: write # push to gh-pages

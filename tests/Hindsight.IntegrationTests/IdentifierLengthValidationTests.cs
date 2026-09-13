@@ -14,7 +14,7 @@ namespace Hindsight.IntegrationTests;
 /// went on calling the wrong function on every future write. These tests pin down that the collision
 /// is now rejected while the model is still being built — the same point <c>dotnet ef migrations add</c>
 /// builds it at, and well before any table or function reaches PostgreSQL — for both writer modes
-/// (docs/articles/configuration.md → Model validation).
+/// (docs/configuration/model-validation.md).
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class IdentifierLengthValidationTests(PostgresFixture postgres)

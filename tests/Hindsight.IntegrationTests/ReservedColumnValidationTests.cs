@@ -8,7 +8,7 @@ namespace Hindsight.IntegrationTests;
 /// (<c>HistoryEntityTypeConvention.ValidateReservedColumnNames</c>) must be rejected while the model is
 /// still being built — the same point <c>dotnet ef migrations add</c> builds it at — in both writer
 /// modes, rather than surfacing later as a raw PostgreSQL error the first time a row is written
-/// (docs/articles/configuration.md → Model validation).
+/// (docs/configuration/model-validation.md).
 /// </summary>
 [Collection(PostgresCollection.Name)]
 public sealed class ReservedColumnValidationTests(PostgresFixture postgres)

@@ -81,7 +81,7 @@ internal static class HistoryWriterTransaction
             + "context.Database.CreateExecutionStrategy().ExecuteAsync(async () => { await using "
             + "var tx = await context.Database.BeginTransactionAsync(); /* ...SaveChangesAsync()... */ "
             + "await tx.CommitAsync(); }); — Hindsight will use that transaction instead of opening its "
-            + "own. See docs/articles/configuration.md.");
+            + "own. See https://horesse.github.io/hindsight-efcore/latest/writing/transactions#enableretryonfailure.");
     }
 
     /// <summary>

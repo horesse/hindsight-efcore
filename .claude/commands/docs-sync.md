@@ -1,14 +1,17 @@
 Check that the documentation matches the code, and fix the gaps.
 
-1. Read `src/**/PublicAPI.Unshipped.txt` and `PublicAPI.Shipped.txt` — that is the real public API.
-2. Grep `docs/articles/*.md` and `README.md` for method and type names. Report:
-   - symbols in the API that no article mentions (undocumented);
-   - names in articles that don't exist in the API (stale or aspirational — check the pre-alpha
-     warning: aspirational is allowed only under it).
-3. Compare `CHANGELOG.md → Unreleased` with `git log --oneline <last tag>..HEAD` (`git describe --tags --abbrev=0`
-   gives the tag). Every `feat:`/`fix:` commit with user-visible effect needs a line.
-4. Run `dotnet tool restore && dotnet docfx docs/docfx.json --warningsAsErrors` and report warnings.
+1. Read `src/**/PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt` — that is the real public API.
+2. Grep the pages (`docs/**/*.md`, excluding `node_modules`), `docs/snippets/*.cs` and `README.md` for
+   type and method names. Report:
+   - public symbols that no page mentions (undocumented);
+   - names on pages that don't exist in the API (stale).
+3. For every `feat:` / `fix:` commit since the last tag
+   (`git log --oneline $(git describe --tags --abbrev=0)..HEAD`) with a user-visible effect, check that
+   a page describes the new behavior, and that a manual upgrade step, if there is one, is in
+   `docs/reference/upgrading.md`.
+4. Run `dotnet build` (compiles `docs/snippets`) and `npm --prefix docs ci && npm --prefix docs run build`
+   (samples, dead links, anchors) and report failures.
 
-Then fix what you found in `docs/articles`, `README.md` and `CHANGELOG.md` following
-`.claude/rules/docs.md`. Do not touch `docs/api/**` or `docs/design.md`. Finish with a list of files
-changed and anything you deliberately left alone with the reason.
+Then fix what you found in `docs/` and `README.md`, following `.claude/rules/docs.md` and
+`docs/README.md`. Do not touch `docs/reference/design.md`. Finish with a list of files changed and
+anything you deliberately left alone with the reason.

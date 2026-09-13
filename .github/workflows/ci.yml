@@ -84,11 +84,6 @@ jobs:
           path: TestResults/**/*.trx
           reporter: dotnet-trx
 
-      - name: Docs build (broken links / missing xrefs fail the PR)
-        run: |
-          dotnet tool restore
-          dotnet docfx docs/docfx.json --warningsAsErrors
-
       - name: Pack (validate packaging on every build)
         run: dotnet pack src/Hindsight.EntityFrameworkCore.PostgreSQL --no-build --configuration Release --output artifacts
 
@@ -97,3 +92,32 @@ jobs:
           name: nupkg
           path: artifacts/*.nupkg
           if-no-files-found: error
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    # The C# samples in docs/snippets are compiled by the solution build above; this job builds the
+    # site itself. VitePress fails on a dead link, check-snippets.mjs on a broken or unused sample.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: docs
+
+      - name: Test the publishing scripts
+        run: npm test
+        working-directory: docs
+
+      - name: Build
+        run: npm run build
+        working-directory: docs
+        env:
+          DOCS_VERSION: nightly
+          DOCS_SITE_ROOT: /hindsight-efcore/

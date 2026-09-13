@@ -27,7 +27,7 @@ namespace Hindsight.Writers;
 /// running. There is no registration pattern for the provider that fixes this — the fixed point is
 /// <c>ApplicationServiceProvider</c> itself, resolved fresh from the context instance every time but
 /// pointing at the same pinned provider regardless. See the "Pooled and factory-created contexts"
-/// section of docs/articles/configuration.md for the safe pattern (a singleton provider that reads
+/// section of docs/writing/change-context.md for the safe pattern (a singleton provider that reads
 /// per-request ambient state, e.g. <c>IHttpContextAccessor.HttpContext</c>, fresh inside
 /// <see cref="IChangeContextProvider.GetChangeContext"/> instead of capturing a scoped dependency in its
 /// constructor).
@@ -85,9 +85,9 @@ internal static class ChangeContextProviderResolver
                 + $"registered with a scoped lifetime cannot be resolved from it. Register "
                 + $"'{providerType.FullName}' as a singleton and read per-request state (e.g. "
                 + "IHttpContextAccessor.HttpContext) inside GetChangeContext instead of injecting a "
-                + "scoped dependency into its constructor. See the \"Pooled and factory-created "
-                + "contexts\" section of docs/articles/configuration.md. The underlying resolution "
-                + "error is the inner exception.", ex);
+                + "scoped dependency into its constructor. See "
+                + "https://horesse.github.io/hindsight-efcore/latest/writing/change-context#pooled-and-factory-created-contexts. "
+                + "The underlying resolution error is the inner exception.", ex);
         }
 
         return resolved as IChangeContextProvider;

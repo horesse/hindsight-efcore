@@ -133,7 +133,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
         // retried inside it), regardless of whether Hindsight ever touches a transaction. Confirmed
         // unaffected by HistoryWriterTransaction now cooperating with an ambient TransactionScope
         // instead of opening its own — see AmbientTransactionScopeTests for the (no-retry) success
-        // path and docs/articles/configuration.md.
+        // path and docs/writing/transactions.md.
         var cs = await postgres.CreateDatabaseAsync(DbName("ambient_txscope_retry", writer), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())

@@ -7,6 +7,11 @@ No database extensions, no superuser, history lives in your migrations, and the 
 [![CI](https://github.com/horesse/hindsight-efcore/actions/workflows/ci.yml/badge.svg)](https://github.com/horesse/hindsight-efcore/actions/workflows/ci.yml)
 [![NuGet](https://img.shields.io/nuget/v/Hindsight.EntityFrameworkCore.PostgreSQL.svg)](https://www.nuget.org/packages/Hindsight.EntityFrameworkCore.PostgreSQL)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-horesse.github.io-0f766e.svg)](https://horesse.github.io/hindsight-efcore/)
+
+**Documentation: <https://horesse.github.io/hindsight-efcore/>**, versioned per release, with a
+[getting started](https://horesse.github.io/hindsight-efcore/latest/introduction/getting-started) guide
+and a [tutorial](https://horesse.github.io/hindsight-efcore/latest/tutorials/audit-trail).
 
 ```csharp
 // configure
@@ -34,7 +39,7 @@ var audit = await db.History<Policy>()
 | Half-open `[from, to)` intervals, `infinity` for current | ✅ | ✅ | ✅ | — |
 
 ¹ application-asserted, not database-guaranteed — see [Trust
-model](docs/articles/configuration.md#trust-model).
+model](https://horesse.github.io/hindsight-efcore/latest/writing/change-context#trust-model).
 
 PostgreSQL 19 brings *application-time* periods (`FOR PORTION OF`, `WITHOUT OVERLAPS`).
 It does **not** bring *system-time* versioning — "when did the database hold this row" — and that
@@ -73,7 +78,8 @@ services.AddDbContext<AppDbContext>(o => o
 > [!IMPORTANT]
 > `UseHindsight()` alone defaults to `HistoryWriter.Interceptor`. Call
 > `UseHistoryWriter(HistoryWriter.Trigger)` for production use unless you specifically cannot grant
-> `CREATE FUNCTION` / `CREATE TRIGGER` privileges — see [History writers](docs/articles/history-writers.md).
+> `CREATE FUNCTION` / `CREATE TRIGGER` privileges — see
+> [Choosing a history writer](https://horesse.github.io/hindsight-efcore/latest/writing/history-writers).
 
 ## Reading history
 
@@ -110,7 +116,7 @@ Overhead a 100-row `SaveChanges` adds over plain EF Core (mean, one PostgreSQL 1
 The interceptor sends every history `UPDATE` + `INSERT` of a `SaveChanges` in one batched round-trip
 (chunked at 512 rows) after the save; the trigger writes history in the database inside the same
 statement. Measured on a Ryzen 7 7800X3D, .NET 10, PostgreSQL 17 — **your numbers will differ**.
-Full tables and method in [History writers](docs/articles/history-writers.md#benchmarks); re-run with
+Full tables and method in [Performance](https://horesse.github.io/hindsight-efcore/latest/reference/benchmarks); re-run with
 `dotnet run -c Release --project benchmarks/Hindsight.Benchmarks -- --filter '*'`.
 
 ## Schema evolution

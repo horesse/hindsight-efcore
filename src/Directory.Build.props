@@ -11,7 +11,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
-    <PackageReleaseNotes>See $(RepositoryUrl)/blob/master/CHANGELOG.md</PackageReleaseNotes>
+    <PackageReleaseNotes>See $(RepositoryUrl)/releases</PackageReleaseNotes>
 
     <!-- Source Link + symbols -->
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

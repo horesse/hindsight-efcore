@@ -15,6 +15,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   design (`DESIGN.md` D3) but was not written down anywhere a reader could find it. `README.md`'s
   comparison table gets a footnote on the same row. No code changed; see `DESIGN.md` D16 for the
   open question this raised about an additional, database-guaranteed `session_user` column.
+- Documented what a plain `SaveChanges` retry does to a restored `Added` entity whose primary key is
+  store-generated: EF Core already wrote the database-generated value onto the entity from the
+  rolled-back transaction before the history write failed, and a retry sends that value back
+  explicitly. Confirmed against real PostgreSQL (`StoreGeneratedKeyRetryTests`) for both Npgsql
+  identity strategies — see
+  [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) and
+  [History writers → What happens if the history write fails](docs/articles/history-writers.md#what-happens-if-the-history-write-fails).
+  No code changed.
 
 ### Added
 

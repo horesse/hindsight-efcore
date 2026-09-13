@@ -413,6 +413,7 @@ public sealed class InterceptorHistoryWriterTests(PostgresFixture postgres)
     {
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(connectionString)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new SingleServiceProvider(typeof(TimeProvider), time))
             .UseHindsight(hb => hb.UseHistoryWriter(writer))
             .Options;

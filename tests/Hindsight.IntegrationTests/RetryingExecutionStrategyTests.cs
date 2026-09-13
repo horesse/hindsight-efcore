@@ -45,6 +45,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(DbName("bare_savechanges_retry", writer), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer).WithChangeContext<StubChangeContextProvider>())
             .Options;
         await using (var setup = new WidgetContext(options))
@@ -71,6 +72,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(DbName("trigger_no_context_retry"), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
             .Options;
         await using (var setup = new WidgetContext(options))
@@ -99,6 +101,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(DbName("wrapped_execution_strategy", writer), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer).WithChangeContext<StubChangeContextProvider>())
             .Options;
         await using (var setup = new WidgetContext(options))
@@ -134,6 +137,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(DbName("ambient_txscope_retry", writer), Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs, o => o.EnableRetryOnFailure())
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer).WithChangeContext<StubChangeContextProvider>())
             .Options;
         await using (var setup = new WidgetContext(options))

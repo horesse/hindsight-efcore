@@ -31,6 +31,7 @@ public sealed class IdentifierLengthValidationTests(PostgresFixture postgres)
         // proves the check runs at that point rather than later against a real database.
         var options = new DbContextOptionsBuilder<CollidingEntitiesContext>()
             .UseNpgsql("Host=localhost;Database=unused")
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
         using var db = new CollidingEntitiesContext(options);
@@ -57,6 +58,7 @@ public sealed class IdentifierLengthValidationTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync("identifier_length_collision_" + writer, Ct);
         var options = new DbContextOptionsBuilder<CollidingEntitiesContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
         await using var db = new CollidingEntitiesContext(options);

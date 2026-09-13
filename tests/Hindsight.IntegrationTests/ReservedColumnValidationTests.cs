@@ -26,6 +26,7 @@ public sealed class ReservedColumnValidationTests(PostgresFixture postgres)
         // later against a real database.
         var options = new DbContextOptionsBuilder<ReasonCollisionContext>()
             .UseNpgsql("Host=localhost;Database=unused")
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
         using var db = new ReasonCollisionContext(options);
@@ -49,6 +50,7 @@ public sealed class ReservedColumnValidationTests(PostgresFixture postgres)
             nameof(EnsureCreated_throws_the_same_way_and_creates_no_table) + "_" + writer, Ct);
         var options = new DbContextOptionsBuilder<ReasonCollisionContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
         await using var db = new ReasonCollisionContext(options);

@@ -35,6 +35,7 @@ public sealed class AmbientTransactionScopeTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(DbName(label, writer), ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer).WithChangeContext<StubChangeContextProvider>())
             .Options;
         await using (var setup = new WidgetContext(options))

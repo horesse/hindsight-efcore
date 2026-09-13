@@ -164,6 +164,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new StubServiceProvider(new Dictionary<Type, object> { [typeof(TimeProvider)] = time }))
             .UseHindsight(hb => hb.UseHistoryWriter(writer))
             .Options;
@@ -314,6 +315,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
 
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new StubServiceProvider(services))
             .UseHindsight(hb =>
             {

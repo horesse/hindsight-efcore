@@ -1,6 +1,5 @@
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -87,12 +86,14 @@ public sealed class OrphanedHistoryTriggerTests(PostgresFixture postgres)
     {
         protected override void OnConfiguring(DbContextOptionsBuilder options)
         {
-            // ManyServiceProvidersCreatedWarning suppressed: this test deliberately builds two distinct,
-            // short-lived contexts (with and without a snapshot) to diff their models — legitimate here,
-            // unlike the long-lived-production-singleton misuse this EF Core diagnostic exists to catch.
+            // EnableServiceProviderCaching(false): this test deliberately builds two distinct, one-shot
+            // contexts (with and without a snapshot) purely to diff their models — never reused, so
+            // opting out of EF's shared service-provider cache is correct, not just quieter. Left
+            // caching-enabled, this and every other file's similar one-shot contexts across the whole
+            // test process eventually cross EF's built-in "more than twenty service providers" cap.
             options.UseNpgsql(connectionString)
                 .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
-                .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
+                .EnableServiceProviderCaching(false);
             if (snapshotModel is not null)
             {
                 options.ReplaceService<IMigrationsAssembly, StubMigrationsAssembly>();

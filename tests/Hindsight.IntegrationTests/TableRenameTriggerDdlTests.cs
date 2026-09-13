@@ -1,6 +1,5 @@
 using System.Reflection;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -239,15 +238,14 @@ public sealed class TableRenameTriggerDdlTests(PostgresFixture postgres)
     {
         var builder = new DbContextOptionsBuilder<RenameContext>()
             .UseNpgsql(connectionString ?? "Host=localhost;Database=unused")
+            // Each test builds several deliberately distinct, one-shot contexts (one per rename side)
+            // purely to diff their models, never reused — so opting out of EF's shared service-provider
+            // cache is correct, not just quieter. Every other integration test file's one-shot contexts
+            // do the same, or the process-wide cumulative cached count crosses EF's built-in "more than
+            // twenty service providers" cap.
+            .EnableServiceProviderCaching(false)
             .ReplaceService<IModelCacheKeyFactory, RenameAwareModelCacheKeyFactory>()
-            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
-            // Each test builds several deliberately distinct, short-lived contexts (one per rename side)
-            // purely to diff their models — exactly the "unique service provider per context" pattern
-            // this EF Core diagnostic exists to catch in long-lived production code, not in a handful of
-            // throwaway test contexts. Left unsuppressed, it throws once the whole test process's
-            // cumulative count of such contexts (this file's plus every other test file's) crosses EF's
-            // built-in threshold — a threshold this file alone doesn't control.
-            .ConfigureWarnings(w => w.Ignore(CoreEventId.ManyServiceProvidersCreatedWarning));
+            .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger));
 
         return new RenameContext(builder.Options, mainTable, historyTable, snapshotModel);
     }

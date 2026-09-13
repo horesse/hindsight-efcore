@@ -129,6 +129,7 @@ public sealed class HistoryWriteFailureTests(PostgresFixture postgres)
 
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new StubServiceProvider(services))
             .UseHindsight(hb => hb
                 .WithChangeContext<RecordingChangeContextProvider>()

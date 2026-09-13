@@ -143,7 +143,7 @@ public sealed class HistoryTableRetentionOnDetemporalizeTests(PostgresFixture po
     {
         protected override void OnConfiguring(DbContextOptionsBuilder options)
         {
-            options.UseNpgsql(connectionString).UseHindsight();
+            options.UseNpgsql(connectionString).UseHindsight().EnableServiceProviderCaching(false);
             if (snapshotModel is not null)
             {
                 options.ReplaceService<IMigrationsAssembly, StubMigrationsAssembly>();

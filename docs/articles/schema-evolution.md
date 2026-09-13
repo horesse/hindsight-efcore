@@ -23,6 +23,44 @@ migration: neither the key columns nor the period columns' types can change once
 created. Removing `IsTemporal()` from an entity (below) does not drop them either, because it does not
 drop the history table.
 
+### Backfilling the period-range index on an upgrade
+
+That "created once, alongside the table" is the important part if you are upgrading from a Hindsight
+version that predates the `ix_<history_table>_period` index (before it existed, `ix_<history_table>_version`
+was the only index a history table got). The index is emitted by the migrations SQL generator directly
+next to a `CreateTableOperation` — it is pure SQL, not something the EF model declares (there is no
+`HasIndex` behind it), so it exists nowhere for the migrations differ to compare against. Practically,
+that means:
+
+- A **new** temporal entity, added after upgrading Hindsight, gets the index the normal way: its
+  `CreateTableOperation` for the history table is followed by the `CREATE INDEX ... USING gist (...)`.
+- An **existing** history table — one whose `CreateTableOperation` was already applied on an earlier
+  Hindsight version — gets nothing. `dotnet ef migrations add` scaffolds an **empty migration**, not a
+  missing-index warning, because as far as the differ can tell nothing in the model changed.
+
+Hindsight does not special-case this on upgrade (DESIGN.md D14) — the same rule that keeps a migration
+from ever touching history tables it didn't just create (golden rule 3) also means it can't reach back
+and add an index to one. If you want the index on tables that predate it, add it yourself, either as a
+hand-written migration (an empty `Up`/`Down` pair with your own `migrationBuilder.Sql(...)`) or directly
+against the database:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_<history_table>_period
+    ON <history_table> USING gist (tstzrange(<period_start_column>, <period_end_column>));
+```
+
+- Use `CONCURRENTLY` — a plain `CREATE INDEX` takes a lock that blocks writes (and the trigger writer's
+  `INSERT`s) to the history table for as long as the build takes; on a table with real history that can
+  be minutes. `CONCURRENTLY` builds it without blocking writers, at the cost of not being usable inside
+  a transaction (run it outside a migration transaction, or as a raw `psql` command).
+- Substitute your actual history table name and, if you overrode the period columns with
+  `HasPeriodStart(...)` / `HasPeriodEnd(...)` in `IsTemporal(...)`, their actual column names — the
+  template above assumes the defaults, `valid_from` and `valid_to`.
+- The index name itself doesn't have to match `ix_<history_table>_period` for anything to work, but
+  matching it means a later Hindsight upgrade that ever needs to reason about the index's presence (none
+  does today) finds the name it expects, and keeps `\di` output on your database consistent with what a
+  freshly created table would show.
+
 ## Adding a column
 
 Add the property to the entity. The migration adds the column to both the main table and the history

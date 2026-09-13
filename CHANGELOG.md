@@ -25,14 +25,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   a clear `InvalidOperationException` naming the provider found and the one required, instead of
   surfacing a confusing DI-resolution or SQL-generation error later from `EnsureCreated`,
   `dotnet ef migrations add`, or `SaveChanges`. No new public API.
-- Every history table now also gets a `gist (tstzrange(valid_from, valid_to))` period-range index
-  (`ix_<history_table>_period`), created by the migration alongside the table in both
-  `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `DESIGN.md` and
-  `.claude/rules/sql-and-migrations.md` had documented this index since before any code existed; it
-  had never actually been built. Without it, an `AsOf` / `History<T>` query that does not also filter
-  on the entity's primary key forced a sequential scan of the whole history table for the
-  period-overlap predicate. No new PostgreSQL extension is required — range types have a native GiST
-  operator class in PostgreSQL core. No new public API.
+- Every **newly created** history table now also gets a `gist (tstzrange(valid_from, valid_to))`
+  period-range index (`ix_<history_table>_period`), created by the migration alongside the
+  `CreateTableOperation` in both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode.
+  `DESIGN.md` and `.claude/rules/sql-and-migrations.md` had documented this index since before any
+  code existed; it had never actually been built. Without it, an `AsOf` / `History<T>` query that
+  does not also filter on the entity's primary key forced a sequential scan of the whole history
+  table for the period-overlap predicate. No new PostgreSQL extension is required — range types have
+  a native GiST operator class in PostgreSQL core. No new public API.
+  **Upgrading an existing deployment:** the index is only ever emitted next to a `CreateTableOperation`
+  (DESIGN.md D14) — it is not part of the EF model, so there is nothing for the migrations differ to
+  compare and `dotnet ef migrations add` after upgrading Hindsight produces **no diff** for history
+  tables that already exist. If your history tables were created on an earlier Hindsight version, you
+  will not get this index automatically; add it yourself with a hand-written migration or a direct
+  `CREATE INDEX CONCURRENTLY`. See
+  [Schema evolution → Backfilling the period-range index on an upgrade](docs/articles/schema-evolution.md#backfilling-the-period-range-index-on-an-upgrade).
 - A temporal entity whose history table name (default or `UseHistoryTable(...)`) would produce a
   generated table, trigger function, trigger, or index name over 63 bytes now fails fast at model-build
   time with a clear `InvalidOperationException`, instead of silently colliding with another entity's

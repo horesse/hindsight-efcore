@@ -11,7 +11,14 @@ public sealed class SmokeTests(PostgresFixture postgres)
         var ct = TestContext.Current.CancellationToken;
         var cs = await postgres.CreateDatabaseAsync("smoke", ct);
 
-        var options = new DbContextOptionsBuilder<SmokeContext>().UseNpgsql(cs).Options;
+        // EnableServiceProviderCaching(false): this context is built once, used briefly and disposed —
+        // never reused — so it should never have been cached in the first place. Every integration test
+        // file builds its own one-shot context the same way; left caching-enabled, the process-wide
+        // cumulative count eventually crosses EF's built-in "more than twenty service providers" cap.
+        var options = new DbContextOptionsBuilder<SmokeContext>()
+            .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
+            .Options;
         await using var db = new SmokeContext(options);
 
         Assert.True(await db.Database.CanConnectAsync(ct));

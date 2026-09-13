@@ -48,6 +48,7 @@ public sealed class PooledContextChangeContextTests(PostgresFixture postgres)
             Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(root)
             .UseHindsight(h => h.WithChangeContext<ScopedProvider>().UseHistoryWriter(writer))
             .Options;
@@ -98,6 +99,7 @@ public sealed class PooledContextChangeContextTests(PostgresFixture postgres)
             Ct);
         var options = new DbContextOptionsBuilder<WidgetContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(root)
             .UseHindsight(h => h.WithChangeContext<AmbientReadingProvider>().UseHistoryWriter(writer))
             .Options;

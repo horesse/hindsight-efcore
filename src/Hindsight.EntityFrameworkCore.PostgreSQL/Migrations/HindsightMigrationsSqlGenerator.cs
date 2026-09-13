@@ -201,6 +201,7 @@ internal sealed class HindsightMigrationsSqlGenerator(
         var result = new List<MigrationOperation>(operations.Count + (indexes.Count + (triggers.Count * 2)));
         var createdOrDropped = new HashSet<(string?, string)>();
         var needsRefresh = new List<HistoryTriggerModel>();
+        var renamedHistoryTables = new List<(string? OldSchema, string OldName, HistoryTriggerModel Model)>();
 
         void MarkRefresh(HistoryTriggerModel model)
         {
@@ -278,7 +279,49 @@ internal sealed class HindsightMigrationsSqlGenerator(
                     }
 
                     break;
+
+                case RenameTableOperation renameTable
+                    when renameTable.NewName is { } newTableName
+                        && byHistoryTable.TryGetValue((renameTable.NewSchema ?? renameTable.Schema, newTableName), out var renamedHistoryTable):
+                    // The history table itself was renamed (DESIGN.md D15: its identity in the model is
+                    // stable, so a rename of the mapped table now reaches here instead of looking like an
+                    // unrelated table dropping and appearing). Recreating the trigger has to wait until
+                    // every operation has run (below): CREATE TRIGGER ... ON <main table> names the main
+                    // table by its current (post-migration) name, and when the SAME migration also renames
+                    // the main table, that rename's own RenameTableOperation can appear later in this list
+                    // — emitting CREATE TRIGGER here, in place, would reference a table that doesn't exist
+                    // under that name yet.
+                    renamedHistoryTables.Add((renameTable.Schema, renameTable.Name, renamedHistoryTable));
+                    createdOrDropped.Add((renameTable.NewSchema ?? renameTable.Schema, newTableName));
+
+                    // A main-table rename needs nothing here: the function body never references the
+                    // main table by name (only NEW/OLD), and PostgreSQL tracks a trigger by the
+                    // relation's OID, so it keeps firing on the renamed table with no DDL of its own —
+                    // verified against real PostgreSQL (DESIGN.md D15).
+                    break;
             }
+        }
+
+        // The history table itself was renamed: its trigger function's own name and its INSERT INTO
+        // target both embed the OLD table name literally, baked in at the last CreateFunction (D3) —
+        // left alone, the next write would fail with "relation ... does not exist". Drop the stale
+        // function (CASCADE takes the trigger that rode along with the table rename) and recreate both
+        // under the new name, only now that every rename in this migration (including the main table's,
+        // if it has one of its own) has already run.
+        foreach (var (oldSchema, oldName, model) in renamedHistoryTables)
+        {
+            result.Add(new SqlOperation
+            {
+                Sql = HistoryTriggerSqlGenerator.DropFunction(oldName, oldSchema, sqlGenerationHelper),
+            });
+            result.Add(new SqlOperation
+            {
+                Sql = HistoryTriggerSqlGenerator.CreateFunction(model, sqlGenerationHelper),
+            });
+            result.Add(new SqlOperation
+            {
+                Sql = HistoryTriggerSqlGenerator.CreateTrigger(model, sqlGenerationHelper),
+            });
         }
 
         // The versioned column set changed: rebuild the function body once, after the column DDL, for

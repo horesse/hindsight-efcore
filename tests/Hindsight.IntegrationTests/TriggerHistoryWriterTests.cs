@@ -372,6 +372,7 @@ public sealed class TriggerHistoryWriterTests(PostgresFixture postgres)
     {
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(connectionString)
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
         return new PolicyContext(options);

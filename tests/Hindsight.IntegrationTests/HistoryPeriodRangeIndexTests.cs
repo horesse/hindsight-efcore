@@ -52,6 +52,7 @@ public sealed class HistoryPeriodRangeIndexTests(PostgresFixture postgres)
         where TContext : DbContext
         => new DbContextOptionsBuilder<TContext>()
             .UseNpgsql(connectionString)
+            .EnableServiceProviderCaching(false)
             .UseHindsight(h => h.UseHistoryWriter(writer))
             .Options;
 

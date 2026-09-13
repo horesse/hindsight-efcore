@@ -180,6 +180,7 @@ public sealed class TriggerDdlTests(PostgresFixture postgres)
     {
         var options = new DbContextOptionsBuilder<TriggerContext>()
             .UseNpgsql(connectionString)
+            .EnableServiceProviderCaching(false)
             .ReplaceService<IModelCacheKeyFactory, NotesAwareModelCacheKeyFactory>()
             .UseHindsight(h => h.UseHistoryWriter(HistoryWriter.Trigger))
             .Options;

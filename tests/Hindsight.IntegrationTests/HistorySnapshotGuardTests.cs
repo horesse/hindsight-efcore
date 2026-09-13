@@ -330,6 +330,7 @@ public sealed class HistorySnapshotGuardTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(dbName, Ct);
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new SingleServiceProvider(typeof(TimeProvider), time))
             .UseHindsight(hb => hb.UseHistoryWriter(writer))
             .Options;

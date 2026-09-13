@@ -313,6 +313,7 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
 
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new SingleServiceProvider(typeof(TimeProvider), time))
             .UseHindsight(hb => hb.UseHistoryWriter(HistoryWriter.Interceptor))
             .AddInterceptors(sql)

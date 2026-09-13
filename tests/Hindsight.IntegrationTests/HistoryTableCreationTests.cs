@@ -94,7 +94,13 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
         var cs = await postgres.CreateDatabaseAsync(
             nameof(History_table_is_not_created_without_UseHindsight), TestContext.Current.CancellationToken);
 
-        var options = new DbContextOptionsBuilder<PolicyContext>().UseNpgsql(cs).Options;
+        // EnableServiceProviderCaching(false): built once, used briefly, disposed — every one-shot
+        // context across the whole test process does the same, or the cumulative cached count crosses
+        // EF's built-in "more than twenty service providers" cap.
+        var options = new DbContextOptionsBuilder<PolicyContext>()
+            .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
+            .Options;
         await using var db = new PolicyContext(options, useHindsight: false);
         await db.Database.EnsureCreatedAsync(TestContext.Current.CancellationToken);
 
@@ -113,7 +119,10 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
             nameof(Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table),
             ct);
 
-        var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>().UseNpgsql(cs).Options;
+        var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>()
+            .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
+            .Options;
         await using var db = new PolicyWithOwnedAddressContext(options);
 
         await Assert.ThrowsAsync<NotSupportedException>(() => db.Database.EnsureCreatedAsync(ct));
@@ -128,7 +137,10 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
     {
         var ct = TestContext.Current.CancellationToken;
         var cs = await postgres.CreateDatabaseAsync(name, ct);
-        var options = new DbContextOptionsBuilder<PolicyContext>().UseNpgsql(cs).Options;
+        var options = new DbContextOptionsBuilder<PolicyContext>()
+            .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
+            .Options;
         var db = new PolicyContext(options, useHindsight: true);
         await db.Database.EnsureCreatedAsync(ct);
         return (cs, db);

@@ -354,6 +354,7 @@ public sealed class HistoryQueryTests(PostgresFixture postgres)
 
         var options = new DbContextOptionsBuilder<PolicyContext>()
             .UseNpgsql(cs)
+            .EnableServiceProviderCaching(false)
             .UseApplicationServiceProvider(new StubServiceProvider(services))
             .UseHindsight(hb =>
             {

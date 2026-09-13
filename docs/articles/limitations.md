@@ -43,6 +43,33 @@
   in the database); switch to it if that matters. Under the trigger writer those paths still record
   history but with `NULL` change-context columns, since no `ChangeContext` is pushed for a write that
   does not go through `SaveChanges`.
+- **A `SaveChangesInterceptor` you add yourself cannot make `HistoryWriter.Interceptor` see a change it
+  makes from inside its own `SavingChanges`.** `HistoryWriterInterceptor.Prepare`/`PrepareAsync` — which
+  calls `HistoryRowPlan.BuildPending` to snapshot every temporal entity currently `Added`, `Modified` or
+  `Deleted` — always runs before an interceptor added with `optionsBuilder.AddInterceptors(...)`, no
+  matter whether that call sits before or after `.UseHindsight(...)` in the chain: Hindsight registers
+  its own interceptors through `HindsightOptionsExtension.ApplyServices`, into EF Core's internal
+  service collection, and interceptors registered that way run ahead of the explicit
+  `DbContextOptionsBuilder.AddInterceptors(...)` list (verified against EF Core 10.0.12 with a
+  stand-in `IDbContextOptionsExtension` in both chain orders — this is EF Core's own interceptor
+  ordering, not something Hindsight controls). A concrete failure: an audit-stamp interceptor that
+  finds an entity `Unchanged` in `SavingChanges` — because some field outside normal property tracking
+  was touched — and reacts by flipping it to `Modified` (`entry.State = EntityState.Modified`) or by
+  marking one extra property `IsModified = true`, to stamp `UpdatedAt`/`UpdatedBy` outside the usual
+  edit path. By the time that code runs, Hindsight has already decided the entity produces no history
+  row; the subsequent `UPDATE` still changes the main table, but no history row is written for it — a
+  silently dropped version, not an exception. Registering the interceptor as an application DI service
+  instead (`services.AddScoped<IInterceptor, MyInterceptor>()`, with or without
+  `UseApplicationServiceProvider`, including the common `services.AddDbContext<T>(...)` idiom) does not
+  help either — verified that such an interceptor is never invoked by `SaveChanges` at all, so it is not
+  a way to run before Hindsight's either. The one thing that genuinely runs first is a hand-written
+  `IDbContextOptionsExtension` of your own, registering through `ApplyServices` and chained *before*
+  `.UseHindsight(...)` — not how a `SaveChangesInterceptor` is normally added, and not a realistic fix
+  for this. `HistoryWriter.Trigger` has no such gap: the physical trigger fires after the real `UPDATE`
+  has already gone to PostgreSQL — including one produced by this audit-stamp interceptor — so it sees
+  the change regardless of any C# interceptor's registration order. Switch writers if this matters. See
+  [History writers → How the interceptor writer works](history-writers.md#how-the-interceptor-writer-works)
+  and [History writers → Tracked-but-unchanged entities](history-writers.md#tracked-but-unchanged-entities).
 - The two writers differ in two observable ways: the interceptor timestamps from `TimeProvider` (so
   tests can inject time) while the trigger uses `now()`; and an `UPDATE` that assigns a versioned
   column its current value writes a history row under the interceptor but not under the trigger.

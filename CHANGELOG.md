@@ -123,6 +123,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   [Schema evolution → Renaming the main table or the history table](docs/articles/schema-evolution.md#renaming-the-main-table-or-the-history-table)
   and DESIGN.md D15. Existing deployments are unaffected unless they actually rename something: no new
   public API, and upgrading Hindsight alone produces no migration diff.
+- Renaming a history table now also renames its period-range index (`ix_<history_table>_period`), in
+  both `HistoryWriter.Interceptor` and `HistoryWriter.Trigger` mode. `ALTER TABLE ... RENAME` renames
+  only the table — confirmed against real PostgreSQL — so the index previously kept its old, literal
+  name after the rename, silently out of sync with the table it indexes. Left alone, this could also
+  fail a later, unrelated migration outright: a different temporal entity whose default-derived history
+  table name happened to match the freed-up old name would have its own `CREATE INDEX` collide with the
+  stale one and fail with "relation ... already exists". No new public API.
 - `HistoryWriter.Interceptor`: when the history write itself fails after a successful data write (for
   example, invalid `ChangeContext.Extra` JSON, or a transient connection failure between the data write
   and the history write), the transaction still rolls back both writes together as before, but `Added`

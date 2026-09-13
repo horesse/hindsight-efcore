@@ -201,7 +201,7 @@ internal sealed class HindsightMigrationsSqlGenerator(
         var result = new List<MigrationOperation>(operations.Count + (indexes.Count + (triggers.Count * 2)));
         var createdOrDropped = new HashSet<(string?, string)>();
         var needsRefresh = new List<HistoryTriggerModel>();
-        var renamedHistoryTables = new List<(string? OldSchema, string OldName, HistoryTriggerModel Model)>();
+        var renamedHistoryTables = new List<(string? OldSchema, string OldName, HistoryPeriodIndexModel Model)>();
 
         void MarkRefresh(HistoryTriggerModel model)
         {
@@ -282,16 +282,19 @@ internal sealed class HindsightMigrationsSqlGenerator(
 
                 case RenameTableOperation renameTable
                     when renameTable.NewName is { } newTableName
-                        && byHistoryTable.TryGetValue((renameTable.NewSchema ?? renameTable.Schema, newTableName), out var renamedHistoryTable):
+                        && byHistoryTableIndex.TryGetValue((renameTable.NewSchema ?? renameTable.Schema, newTableName), out var renamedIndex):
                     // The history table itself was renamed (DESIGN.md D15: its identity in the model is
                     // stable, so a rename of the mapped table now reaches here instead of looking like an
-                    // unrelated table dropping and appearing). Recreating the trigger has to wait until
-                    // every operation has run (below): CREATE TRIGGER ... ON <main table> names the main
-                    // table by its current (post-migration) name, and when the SAME migration also renames
-                    // the main table, that rename's own RenameTableOperation can appear later in this list
-                    // — emitting CREATE TRIGGER here, in place, would reference a table that doesn't exist
-                    // under that name yet.
-                    renamedHistoryTables.Add((renameTable.Schema, renameTable.Name, renamedHistoryTable));
+                    // unrelated table dropping and appearing). Matched against byHistoryTableIndex — built
+                    // regardless of writer mode, unlike byHistoryTable — because the period-range index
+                    // exists in both writer modes and needs renaming in both; the Trigger-mode function and
+                    // trigger, recreated below, are the writer-specific part of this same rename.
+                    // Recreating the trigger has to wait until every operation has run (below): CREATE
+                    // TRIGGER ... ON <main table> names the main table by its current (post-migration) name,
+                    // and when the SAME migration also renames the main table, that rename's own
+                    // RenameTableOperation can appear later in this list — emitting CREATE TRIGGER here, in
+                    // place, would reference a table that doesn't exist under that name yet.
+                    renamedHistoryTables.Add((renameTable.Schema, renameTable.Name, renamedIndex));
                     createdOrDropped.Add((renameTable.NewSchema ?? renameTable.Schema, newTableName));
 
                     // A main-table rename needs nothing here: the function body never references the
@@ -302,25 +305,36 @@ internal sealed class HindsightMigrationsSqlGenerator(
             }
         }
 
-        // The history table itself was renamed: its trigger function's own name and its INSERT INTO
-        // target both embed the OLD table name literally, baked in at the last CreateFunction (D3) —
-        // left alone, the next write would fail with "relation ... does not exist". Drop the stale
+        // The history table itself was renamed: in Trigger mode, its trigger function's own name and its
+        // INSERT INTO target both embed the OLD table name literally, baked in at the last CreateFunction
+        // (D3) — left alone, the next write would fail with "relation ... does not exist". Drop the stale
         // function (CASCADE takes the trigger that rode along with the table rename) and recreate both
         // under the new name, only now that every rename in this migration (including the main table's,
-        // if it has one of its own) has already run.
+        // if it has one of its own) has already run. Then, in both writer modes, rename the period-range
+        // index: PostgreSQL's ALTER TABLE ... RENAME leaves it under its old, now-stale name (verified
+        // against real PostgreSQL) — left alone, that stale name becomes a landmine for the next entity
+        // whose default-derived history table name happens to collide with it.
         foreach (var (oldSchema, oldName, model) in renamedHistoryTables)
         {
+            if (byHistoryTable.TryGetValue((model.HistorySchema, model.HistoryTable), out var trigger))
+            {
+                result.Add(new SqlOperation
+                {
+                    Sql = HistoryTriggerSqlGenerator.DropFunction(oldName, oldSchema, sqlGenerationHelper),
+                });
+                result.Add(new SqlOperation
+                {
+                    Sql = HistoryTriggerSqlGenerator.CreateFunction(trigger, sqlGenerationHelper),
+                });
+                result.Add(new SqlOperation
+                {
+                    Sql = HistoryTriggerSqlGenerator.CreateTrigger(trigger, sqlGenerationHelper),
+                });
+            }
+
             result.Add(new SqlOperation
             {
-                Sql = HistoryTriggerSqlGenerator.DropFunction(oldName, oldSchema, sqlGenerationHelper),
-            });
-            result.Add(new SqlOperation
-            {
-                Sql = HistoryTriggerSqlGenerator.CreateFunction(model, sqlGenerationHelper),
-            });
-            result.Add(new SqlOperation
-            {
-                Sql = HistoryTriggerSqlGenerator.CreateTrigger(model, sqlGenerationHelper),
+                Sql = HistoryIndexSqlGenerator.RenamePeriodRangeIndex(oldName, oldSchema, model.HistoryTable, sqlGenerationHelper),
             });
         }
 

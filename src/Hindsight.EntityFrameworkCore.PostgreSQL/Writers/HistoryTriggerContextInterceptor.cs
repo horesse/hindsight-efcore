@@ -33,7 +33,10 @@ namespace Hindsight.Writers;
 /// context columns (DESIGN.md D4). A configured retrying execution strategy makes opening a new EF
 /// transaction unsafe — see <see cref="HistoryWriterTransaction"/> — but only once there is actually a
 /// context to push (<see cref="Capture"/> returns <see langword="null"/>, and no transaction is touched,
-/// when neither a change context provider nor <see cref="ChangeReasonScope"/> is in use).
+/// when neither a change context provider nor <see cref="ChangeReasonScope"/> is in use — and, for that
+/// optimization to be safe, only when this <c>SaveChanges</c> is not running inside a transaction the
+/// caller already opened itself, since a previous <c>SaveChanges</c> in that same transaction may have
+/// left a stale <c>set_config</c> value behind for this one to otherwise inherit).
 /// </remarks>
 internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 {
@@ -203,11 +206,16 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         }
     }
 
-    // The five (key, value) pairs to push, or null when the change-context feature is not in use or
-    // nothing temporal is being saved — in which case no transaction is forced and the provider is not
-    // consulted. When it is in use, all five keys are always pushed (empty string for a null member,
-    // which the trigger's nullif() maps back to NULL) so a later SaveChanges in the same caller
-    // transaction fully overrides the previous one's context rather than inheriting stale values.
+    // The five (key, value) pairs to push, or null when nothing temporal is being saved, or when the
+    // change-context feature is not in use AND this SaveChanges is not running inside a transaction the
+    // caller opened itself — in which case no transaction is forced and the provider is not consulted.
+    // Otherwise all five keys are always pushed (empty string for a null member, which the trigger's
+    // nullif() maps back to NULL): set_config(..., true) is transaction-local, so a previous SaveChanges
+    // in the same caller-opened transaction may have left values behind via set_config, and a later
+    // SaveChanges with no provider and no WithReason() of its own must override them back to empty
+    // rather than silently inheriting the previous call's context. When Hindsight opens the transaction
+    // itself (the normal case — see HistoryWriterTransaction.BeginIfNeeded), each SaveChanges gets its
+    // own transaction, so there is nothing to inherit and the early return is safe.
     private static List<KeyValuePair<string, string>>? Capture(DbContext context)
     {
         if (!HasTemporalChange(context))
@@ -217,7 +225,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 
         var provider = ChangeContextProviderResolver.Resolve(context);
         var scopedReason = ChangeReasonScope.CurrentFor(context);
-        if (provider is null && scopedReason is null)
+        if (provider is null && scopedReason is null && !IsInsideCallerOpenedTransaction(context))
         {
             return null;
         }
@@ -272,6 +280,16 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
             tracker.AutoDetectChangesEnabled = autoDetectChangesEnabled;
         }
     }
+
+    // Same signal HistoryWriterTransaction.BeginIfNeeded/BeginIfNeededAsync use, in the same order, to
+    // recognize "the caller is already inside a transaction Hindsight did not open for this
+    // SaveChanges": an explicit transaction already set on the context, or an ambient
+    // System.Transactions.TransactionScope. Must be read before BeginIfNeeded runs (Push/PushAsync call
+    // Capture first) — BeginIfNeeded's own ambient-transaction branch opens the connection, which would
+    // make this check observe state BeginIfNeeded itself just created rather than state the caller had
+    // going in.
+    private static bool IsInsideCallerOpenedTransaction(DbContext context)
+        => context.Database.CurrentTransaction is not null || System.Transactions.Transaction.Current is not null;
 
     private static (DbConnection Connection, DbTransaction? Transaction) Target(DbContext context)
         => (context.Database.GetDbConnection(), context.Database.CurrentTransaction?.GetDbTransaction());

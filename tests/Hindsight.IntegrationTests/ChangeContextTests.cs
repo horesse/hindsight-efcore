@@ -1,3 +1,4 @@
+using System.Transactions;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -254,6 +255,74 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
         var row = Assert.Single(await ReadContextAsync(h.ConnectionString, policyId: 1));
         Assert.Equal("manual fix", row.Reason);
         Assert.Null(row.ChangedBy);
+    }
+
+    // Trigger-only: set_config('hindsight.*', value, true) is transaction-local, so it only outlives a
+    // single SaveChanges when the caller (not Hindsight) opened the transaction. Interceptor mode has no
+    // such GUC to leak — it writes the context into each INSERT directly — so this scenario does not
+    // apply there and is not a [Theory] over both writers.
+    [Fact]
+    public async Task WithReason_does_not_leak_across_SaveChanges_in_an_explicit_caller_transaction()
+    {
+        await using var h = await CreateAsync(
+            HistoryWriter.Trigger,
+            nameof(WithReason_does_not_leak_across_SaveChanges_in_an_explicit_caller_transaction),
+            new(_t0),
+            provider: null);
+
+        await using var tx = await h.Db.Database.BeginTransactionAsync(Ct);
+
+        using (h.Db.WithReason("import"))
+        {
+            h.Db.Policies.Add(NewPolicy());
+            await h.Db.SaveChangesAsync(Ct); // reason applies to this SaveChanges only
+        }
+
+        var second = NewPolicy("ACME-2");
+        h.Db.Policies.Add(second);
+        await h.Db.SaveChangesAsync(Ct); // no WithReason here — must not inherit "import"
+
+        await tx.CommitAsync(Ct);
+
+        var firstRow = Assert.Single(await ReadContextAsync(h.ConnectionString, policyId: 1));
+        var secondRow = Assert.Single(await ReadContextAsync(h.ConnectionString, policyId: second.Id));
+        Assert.Equal("import", firstRow.Reason);
+        Assert.Null(secondRow.Reason);
+    }
+
+    // Same scenario, ambient System.Transactions.TransactionScope instead of an explicit
+    // BeginTransactionAsync — HistoryWriterTransaction.BeginIfNeeded treats both as "the caller already
+    // opened this transaction", and Capture must recognize both the same way.
+    [Fact]
+    public async Task WithReason_does_not_leak_across_SaveChanges_under_an_ambient_TransactionScope()
+    {
+        await using var h = await CreateAsync(
+            HistoryWriter.Trigger,
+            nameof(WithReason_does_not_leak_across_SaveChanges_under_an_ambient_TransactionScope),
+            new(_t0),
+            provider: null);
+
+        int secondPolicyId;
+        using (var scope = new TransactionScope(TransactionScopeAsyncFlowOption.Enabled))
+        {
+            using (h.Db.WithReason("import"))
+            {
+                h.Db.Policies.Add(NewPolicy());
+                await h.Db.SaveChangesAsync(Ct); // reason applies to this SaveChanges only
+            }
+
+            var second = NewPolicy("ACME-2");
+            h.Db.Policies.Add(second);
+            await h.Db.SaveChangesAsync(Ct); // no WithReason here — must not inherit "import"
+            secondPolicyId = second.Id;
+
+            scope.Complete();
+        }
+
+        var firstRow = Assert.Single(await ReadContextAsync(h.ConnectionString, policyId: 1));
+        var secondRow = Assert.Single(await ReadContextAsync(h.ConnectionString, policyId: secondPolicyId));
+        Assert.Equal("import", firstRow.Reason);
+        Assert.Null(secondRow.Reason);
     }
 
     [Theory]

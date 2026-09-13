@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+
+- `tests/Hindsight.IntegrationTests/CustomInterceptorOrderingTests.cs`: an integration test pinning down
+  the ordering claim in [Limitations → Known trade-offs](docs/articles/limitations.md#known-trade-offs) —
+  a `SaveChangesInterceptor` added with `optionsBuilder.AddInterceptors(...)` always runs after
+  Hindsight's own, so one that moves an entity from `Unchanged` to `Modified` inside its own
+  `SavingChanges` writes no history row under `HistoryWriter.Interceptor` but does under
+  `HistoryWriter.Trigger`. Documentation only; no behavior changed.
+
 ### Changed
 
 - Documented the change-context trust model: `docs/articles/configuration.md` and

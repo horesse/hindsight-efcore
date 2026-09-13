@@ -334,6 +334,14 @@ off) and reuse `Guard`'s result instead of re-detecting. That removes one of the
 passes — EF Core's own internal pass for the actual save is untouched — so allocations drop by close to
 a third at every tracked-entity count:
 
+> This same registration order is also why a `SaveChangesInterceptor` you add with
+> `optionsBuilder.AddInterceptors(...)` can never get ahead of `Guard` or the history writer, no matter
+> where `.AddInterceptors(...)` sits relative to `.UseHindsight(...)` in the chain: interceptors added
+> that way always run after every interceptor `HindsightOptionsExtension.ApplyServices` registers into
+> EF Core's internal service collection. Under `HistoryWriter.Interceptor` that turns into a real
+> limitation — see [Limitations → Known trade-offs](limitations.md#known-trade-offs) for the audit-stamp
+> scenario it causes.
+
 | TrackedUnchangedCount | None | Interceptor | Trigger |
 |--:|--:|--:|--:|
 | 0 | 9.09 KB | 26.51 KB | 10.61 KB |

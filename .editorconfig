@@ -56,6 +56,19 @@ dotnet_style_prefer_is_null_check_over_reference_equality_method = true:warning
 dotnet_code_quality_unused_parameters = all:warning
 
 # ---- Naming ----
+# private const fields are PascalCase, matching the internal/public const fields elsewhere in the repo
+# (HindsightHistoryColumns, HindsightAnnotationNames, ...) instead of the leading-underscore instance-
+# field style below. Listed first: naming rules apply in file order, and a const field would otherwise
+# also match private_fields. private static readonly fields are unaffected — they already follow
+# private_fields (e.g. cached MethodInfo/ConcurrentDictionary fields) and stay that way.
+dotnet_naming_rule.private_const_fields_pascal_case.symbols = private_const_fields
+dotnet_naming_rule.private_const_fields_pascal_case.style = pascal_case
+dotnet_naming_rule.private_const_fields_pascal_case.severity = warning
+dotnet_naming_symbols.private_const_fields.applicable_kinds = field
+dotnet_naming_symbols.private_const_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_const_fields.required_modifiers = const
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
 dotnet_naming_rule.private_fields_underscore.symbols = private_fields
 dotnet_naming_rule.private_fields_underscore.style = underscore_camel
 dotnet_naming_rule.private_fields_underscore.severity = warning

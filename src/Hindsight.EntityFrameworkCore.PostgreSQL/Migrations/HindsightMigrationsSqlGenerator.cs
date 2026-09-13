@@ -26,7 +26,7 @@ namespace Hindsight.Migrations;
 /// list, then the whole list is handed to the inner generator — no <c>protected</c> override, no
 /// internal type named here. Everything needed is read from the <see cref="IModel"/> passed to
 /// <see cref="Generate"/>; annotations reach it verbatim on both the design-time model and a migration's
-/// compiled <c>TargetModel</c> (DESIGN.md D6, resolved by spike 2026-09-11). The period-range index is
+/// compiled <c>TargetModel</c> (DESIGN.md D6). The period-range index is
 /// created exactly once, alongside the table: a history table's period columns and their types never
 /// change after creation, so — unlike the trigger function — there is nothing to ever re-emit for it, and
 /// a de-temporalized entity's history table (D6) keeps its index for free, because D6 never drops or

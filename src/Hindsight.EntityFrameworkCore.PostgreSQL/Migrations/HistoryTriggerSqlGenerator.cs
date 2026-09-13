@@ -40,19 +40,19 @@ internal sealed record HistoryTriggerModel(
 /// <c>&lt;history_table&gt;_write()</c> function and a <c>&lt;history_table&gt;_trg</c>
 /// <c>AFTER INSERT OR UPDATE OR DELETE</c> trigger on the main table. All identifiers pass through
 /// <see cref="ISqlGenerationHelper.DelimitIdentifier(string)"/>; the function body is dollar-quoted so
-/// nothing inside it needs escaping (.claude/rules/sql-and-migrations.md).
+/// nothing inside it needs escaping.
 /// </summary>
 internal static class HistoryTriggerSqlGenerator
 {
     // The current-version marker (DESIGN.md D5) and the timestamptz store type, spelled exactly as the
-    // history table declares them so a Verify snapshot of the DDL stays byte-stable. 'internal' rather
-    // than 'private' only to satisfy the repo's private-field naming rule (leading underscore).
-    internal const string Infinity = "'infinity'::timestamp with time zone";
-    internal const string TimestamptzType = "timestamp with time zone";
-    internal const string DollarTag = "$hindsight$";
+    // history table declares them so a Verify snapshot of the DDL stays byte-stable.
+    private const string Infinity = "'infinity'::timestamp with time zone";
+    private const string TimestamptzType = "timestamp with time zone";
+    private const string DollarTag = "$hindsight$";
 
-    // set_config / current_setting keys. The trailing 'true' (missing_ok) on every read is mandatory:
-    // a transaction that pushed no context must still succeed (.claude/rules/sql-and-migrations.md).
+    // set_config / current_setting keys, also read by HistoryTriggerContextInterceptor when it pushes
+    // the change context, hence internal rather than private. The trailing 'true' (missing_ok) on every
+    // read is mandatory: a transaction that pushed no context must still succeed.
     internal const string ChangedByKey = "hindsight.changed_by";
     internal const string ChangedByNameKey = "hindsight.changed_by_name";
     internal const string CorrelationIdKey = "hindsight.correlation_id";
@@ -110,8 +110,7 @@ internal static class HistoryTriggerSqlGenerator
 
         // Close the still-open version of the row being updated/deleted. GREATEST(now(), valid_from +
         // 1µs) guarantees a strictly positive interval even if two transactions see the same now();
-        // the closed value is captured so the next version starts exactly where the previous one ended
-        // (.claude/rules/sql-and-migrations.md).
+        // the closed value is captured so the next version starts exactly where the previous one ended.
         var keyMatch = string.Join(
             " AND ",
             model.KeyColumns.Select(column => $"{sql.DelimitIdentifier(column)} = OLD.{sql.DelimitIdentifier(column)}"));

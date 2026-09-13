@@ -20,7 +20,7 @@ internal sealed class HistoryWriterInterceptor : SaveChangesInterceptor
     // State that must survive from SavingChanges to SavedChanges. Keyed by the context instance:
     // EF Core forbids concurrent operations on one context, so there is at most one live entry per
     // context, removed in SavedChanges / SaveChangesFailed. Deliberately not a plain field — the
-    // interceptor is shared between contexts and a field would race (CLAUDE.md rule 5).
+    // interceptor is shared between contexts and a field would race.
     private readonly ConditionalWeakTable<DbContext, SaveState> _pending = new();
 
     public override InterceptionResult<int> SavingChanges(

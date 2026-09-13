@@ -27,25 +27,24 @@ namespace Hindsight.Conventions;
 /// </remarks>
 internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrationsAssembly) : IModelFinalizingConvention
 {
-    // Column types Hindsight fixes on history tables (DESIGN.md D5). 'internal' rather than 'private'
-    // only to satisfy the repo's private-field naming rule, which expects a leading underscore.
-    internal const string TimestamptzColumnType = "timestamp with time zone";
-    internal const string PeriodEndDefaultSql = "'infinity'::timestamp with time zone";
-    internal const string ExtraColumnType = "jsonb";
+    // Column types Hindsight fixes on history tables (DESIGN.md D5).
+    private const string TimestamptzColumnType = "timestamp with time zone";
+    private const string PeriodEndDefaultSql = "'infinity'::timestamp with time zone";
+    private const string ExtraColumnType = "jsonb";
 
     // The history entity's identity in the model (DESIGN.md D15) for a source becoming temporal for
     // the first time: stable across a later table rename, unlike the table name itself. Styled after
     // EF's own generated names for entities that don't come from a CLR type directly (e.g.
     // "Blog.Owner#Owner" for an owned type) — '#' cannot appear in a CLR type name, so this can never
     // collide with a real entity.
-    internal const string HistoryIdentitySuffix = "#History";
+    private const string HistoryIdentitySuffix = "#History";
 
     // PostgreSQL's NAMEDATALEN is 64, so any identifier (table, column, function, trigger, index name)
     // longer than this is silently truncated to it, in bytes — not characters; PostgreSQL counts UTF-8
     // bytes, and a quoted identifier can be non-ASCII. Two identifiers that share the same first 63
     // bytes become the same physical object with no error from PostgreSQL and none from EF Core either
     // (see ValidateIdentifierLengths).
-    internal const int MaxIdentifierBytes = 63;
+    private const int MaxIdentifierBytes = 63;
 
     // Building the snapshot model runs the finalizing conventions again (this one included); the flag
     // stops the re-entrant pass from resolving the snapshot a second time.
@@ -106,7 +105,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         // skips excluded properties too), so there is no column left to identify which history rows
         // belong to which version of the entity. The writer's "close the previous version" step has
         // nothing to match on, and it would silently write no history row at all, forever, with no
-        // error (CLAUDE.md rule 2). Reject at model build time instead.
+        // error. Reject at model build time instead.
         if (entityType.FindPrimaryKey()!.Properties.All(property => property[HindsightAnnotationNames.IsExcluded] is true))
         {
             throw new InvalidOperationException(
@@ -127,7 +126,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         // Owned references and complex properties live on their own IConventionEntityType / complex type,
         // so GetProperties() below never sees their columns: mirroring would silently drop them from
         // history, and a SaveChanges that only touches one of them would silently write no history row at
-        // all (CLAUDE.md rule 2). Reject at model build time instead — matches the read-side guard in
+        // all. Reject at model build time instead — matches the read-side guard in
         // HistoryQueryRootRewriter (DESIGN.md D12).
         if (entityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned())
             || entityType.GetComplexProperties().Any())
@@ -155,8 +154,8 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     // already exists"), but CREATE OR REPLACE FUNCTION does not — it silently replaces the losing
     // entity's trigger function body with the winning one's, and the losing entity's own trigger (itself
     // unaffected, since triggers are scoped per relation, not global) goes on calling the wrong function
-    // on every future insert/update/delete, corrupting that entity's history with no error anywhere
-    // (CLAUDE.md rule 2). EF Core itself performs no such check at model-build or migration-generation
+    // on every future insert/update/delete, corrupting that entity's history with no error anywhere.
+    // EF Core itself performs no such check at model-build or migration-generation
     // time, so `dotnet ef migrations add` succeeds silently for both entities; the collision only
     // surfaces once the generated SQL reaches PostgreSQL. Reject it here instead.
     private static void ValidateIdentifierLengths(IConventionEntityType entityType, string historyTableName)

@@ -131,6 +131,17 @@ The original design argument "a trigger can't know the user" is false — that's
 `set_config` is for. Both writers implemented 2026-09-11. Trigger is the recommended mode; Interceptor
 stays as a reference implementation and for environments where trigger creation is forbidden by policy.
 
+**`HindsightOptionsExtension.Validate`'s provider check.** `UseHindsight()` must reject every provider but
+Npgsql (README non-goal: PostgreSQL only), without naming Npgsql's own `.Internal` options extension type
+(golden rule 1). It instead finds the registered `IsDatabaseProvider` extension and reads the assembly its
+concrete type was declared in — public `System.Reflection` metadata, nothing more than asking "which
+package produced this object" — and compares that against `"Npgsql.EntityFrameworkCore.PostgreSQL"`. That
+string is the same one `DbContext.Database.ProviderName` reports once a context built with `UseNpgsql(...)`
+exists, verified against `Npgsql.EntityFrameworkCore.PostgreSQL` 10.0.3; `Validate` runs earlier than that,
+before a service provider exists to ask, hence reading the equivalent value straight off the extension's
+declaring assembly instead. Revisit if Npgsql ever changes how its provider extension reports its owning
+assembly (the `efcore-preview` canary covers this).
+
 ## D4. Bulk operations are not intercepted
 
 `ExecuteUpdate`/`ExecuteDelete` are caught by the Trigger writer for free (verified 2026-09-11 —

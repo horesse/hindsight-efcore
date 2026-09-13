@@ -18,7 +18,7 @@ namespace Hindsight.Writers;
 /// for every non-key property, not the database's last version. EF Core exposes no reliable public
 /// signal that distinguishes "loaded, then removed" from "attached as a stub, then removed" — both end
 /// up with <c>OriginalValues == CurrentValues</c> — so this reader does not try to guess; it always
-/// re-reads, for every <c>Deleted</c> row, rather than risk a fabricated tombstone (CLAUDE.md rule 2).
+/// re-reads, for every <c>Deleted</c> row, rather than risk a fabricated tombstone.
 /// This is what DESIGN.md D5/D12 promise: the delete tombstone carries the entity's real pre-delete
 /// values, not whatever happened to be sitting in the caller's stub.
 /// </para>

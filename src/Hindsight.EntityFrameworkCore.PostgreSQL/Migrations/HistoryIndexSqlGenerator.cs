@@ -19,7 +19,7 @@ internal sealed record HistoryPeriodIndexModel(
 
 /// <summary>
 /// Builds the <c>CREATE INDEX ... USING gist</c> DDL for a history table's period-overlap predicate
-/// (DESIGN.md D5, .claude/rules/sql-and-migrations.md). <c>AsOf(t)</c> and <c>History&lt;T&gt;</c>'s
+/// (DESIGN.md D5). <c>AsOf(t)</c> and <c>History&lt;T&gt;</c>'s
 /// range-overlap test (<c>valid_from &lt;= t AND valid_to &gt; t</c>) is a range-containment query;
 /// without a range index a query that cannot also filter on the version index's leading key columns
 /// forces a sequential scan of the whole history table.

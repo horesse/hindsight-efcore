@@ -18,8 +18,7 @@ namespace Hindsight.Writers;
 /// <c>AddDbContextFactory&lt;T&gt;()</c> (pooled or not), every pooled/factory-created context shares
 /// one <c>DbContextOptions</c> instance built once when the pool/factory is configured, so
 /// <c>ApplicationServiceProvider</c> is whichever provider was active at that moment — normally the
-/// application's root provider, never a request's scope (confirmed empirically against EF Core 10.0.12:
-/// identical across every simulated request that rents from the same pool or factory). A change context
+/// application's root provider, never a request's scope (see DESIGN.md D3). A change context
 /// provider registered with a scoped lifetime can therefore not be resolved correctly from it: with
 /// <c>ServiceProviderOptions.ValidateScopes</c> on (ASP.NET Core's Development default) the call below
 /// throws immediately, every time; with it off (the common production default) the container silently

@@ -136,6 +136,16 @@ History keeps growing under the new name — nothing is split or lost, and no da
   and its own name both embed the table name literally, so this is the one rename that genuinely
   requires it.
 
+Either way, the history table's period-range index (an `ALTER INDEX ... RENAME TO ...`) is renamed
+along with it, in both writer modes: `ALTER TABLE ... RENAME` renames the table but not the index built
+on it, so without this the index would keep its old name forever, silently out of sync with the table
+it indexes. This matters beyond cosmetics — the old name is now free, and if a *different*, later
+temporal entity's default-derived history table name happens to match it, that entity's own index
+would otherwise collide with the stale one and fail to be created. (The separate, ordinary
+`ix_<history_table>_version` index needs no special handling here: it is a normal EF-tracked index, so
+EF Core's differ already renames it on its own — only the hand-written GiST period-range index, which
+EF's fluent API cannot express, needs Hindsight to rename it explicitly.)
+
 This works because the history entity's identity in the EF model does not depend on its table name
 (DESIGN.md D15) — renaming the table doesn't change which entity the differ thinks it is. If you are
 upgrading from a Hindsight version before this, nothing changes for you unless you rename something:

@@ -223,6 +223,13 @@ works the same as in interceptor mode. This costs one extra round-trip per `Save
 call and the five extra columns fold into the batch round-trip it already sends, with no measurable
 change.
 
+The "only when there is a `ChangeContext` to push" skip applies only when Hindsight opens the
+transaction itself, so each `SaveChanges` gets its own. When the caller already opened the
+transaction — an explicit `BeginTransactionAsync()`, or an ambient `TransactionScope` — `set_config`
+is still transaction-local to *that* transaction, not to the one `SaveChanges` call; Hindsight always
+re-pushes all five keys (empty, read back as `NULL`) on every `SaveChanges` in that case, so a second
+`SaveChanges` with no `WithReason(...)` or provider of its own does not inherit the first one's values.
+
 Bulk writes (`ExecuteUpdate` / `ExecuteDelete`) and raw SQL still get full history rows — the trigger
 sees them — but with `NULL` context columns, because nothing pushed a `ChangeContext` for them.
 

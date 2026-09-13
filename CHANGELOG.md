@@ -153,6 +153,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
   documentation section covers, since it cannot be reliably detected at runtime. The resolution logic
   itself, previously duplicated between `HistoryWriter.Interceptor` and `HistoryWriter.Trigger`, is now
   one internal `ChangeContextProviderResolver` shared by both. No public API change.
+- `HistoryWriter.Trigger`: a `reason` pushed by `DbContext.WithReason("…")` no longer leaks into a
+  *later* `SaveChanges` on the same `DbContext` inside a transaction the caller opened itself (an
+  explicit `context.Database.BeginTransactionAsync()`, or an ambient
+  `System.Transactions.TransactionScope`), when that later `SaveChanges` has neither its own
+  `WithReason(...)` nor a registered `IChangeContextProvider`. `set_config('hindsight.reason', …, true)`
+  is transaction-local, not `SaveChanges`-local: previously, once nothing was left to push (no provider,
+  no scoped reason), `SaveChanges` skipped `set_config` entirely as an optimization and the *previous*
+  `SaveChanges`'s value — still live for the rest of the caller's transaction — was picked up by the
+  trigger instead of `NULL`. The same applied to `changed_by` / `changed_by_name` / `correlation_id` /
+  `extra`. Hindsight now always re-pushes all five keys (empty, mapped to `NULL` by the trigger's
+  `nullif(...)`) whenever `SaveChanges` runs inside a transaction it did not open itself; when Hindsight
+  opens the transaction (the common case — no explicit transaction, no ambient scope), each
+  `SaveChanges` still gets its own transaction and the skip-`set_config` optimization is unaffected. No
+  public API change.
 
 ### Changed
 

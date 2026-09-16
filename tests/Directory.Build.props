@@ -15,6 +15,11 @@
     <!-- Test code is allowed to be less strict than library code. -->
     <AnalysisLevel>latest-minimum</AnalysisLevel>
     <NoWarn>$(NoWarn);CS1591;CA1707;CA2007</NoWarn>
+    <!-- Verify 33+ added a SponsorCheck build gate (SC021). Hindsight is MIT-licensed and generates
+         no revenue, so it qualifies for the publisher's OpenSource exemption; the exemption is
+         time-bounded (max 12 months) and needs renewing before it lapses. -->
+    <Verify_SponsorshipExemption>OpenSource</Verify_SponsorshipExemption>
+    <Verify_SponsorshipExemptionUntil>2027-09</Verify_SponsorshipExemptionUntil>
   </PropertyGroup>
 
   <ItemGroup>

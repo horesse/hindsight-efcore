@@ -20,6 +20,7 @@ so you name the entity type.
 | `IsCurrent` | `true` for the version that is current now (`ValidTo` is `DateTimeOffset.MaxValue`) |
 | `Operation` | `VersionOperation.Insert`, `Update` or `Delete` |
 | `ChangedBy`, `ChangedByName`, `CorrelationId`, `Reason`, `Extra` | the [change context](/writing/change-context), or `null` |
+| `DbSessionUser` | PostgreSQL's own `session_user` (opt-in, see [Database session user](/writing/change-context#database-session-user)), or `null` if the entity did not opt in |
 
 ## Deletes
 

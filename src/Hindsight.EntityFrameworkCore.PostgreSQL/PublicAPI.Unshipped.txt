@@ -1,1 +1,5 @@
 #nullable enable
+const Hindsight.HindsightAnnotationNames.HasDbSessionUser = "Hindsight:HasDbSessionUser" -> string!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser() -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.Version<TEntity>.DbSessionUser.get -> string?
+Hindsight.Version<TEntity>.DbSessionUser.init -> void

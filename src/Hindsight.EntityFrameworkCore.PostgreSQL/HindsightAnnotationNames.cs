@@ -31,6 +31,12 @@ public static class HindsightAnnotationNames
     public const string IsExcluded = Prefix + "IsExcluded";
 
     /// <summary>
+    /// Opts an entity type into the <c>db_session_user</c> history column (DESIGN.md D16). Set by
+    /// <see cref="TemporalEntityTypeBuilder{TEntity}.WithDbSessionUser"/>. Value: <see langword="true"/>.
+    /// </summary>
+    public const string HasDbSessionUser = Prefix + "HasDbSessionUser";
+
+    /// <summary>
     /// On a temporal entity type: the shared-type name of its generated history entity type.
     /// Written by the model-finalizing convention. Value: <see cref="string"/>.
     /// </summary>

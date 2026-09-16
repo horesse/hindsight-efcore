@@ -150,6 +150,7 @@ internal sealed class HindsightMigrationsSqlGenerator(
             HindsightHistoryColumns.CorrelationId,
             HindsightHistoryColumns.Reason,
             HindsightHistoryColumns.Extra,
+            HindsightHistoryColumns.DbSessionUser,
             periodStart,
             periodEnd,
         };

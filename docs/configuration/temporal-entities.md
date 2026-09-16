@@ -30,6 +30,7 @@ Pass a builder to `IsTemporal` to change any default:
 | `UseHistoryTable(name, schema)` | Names the history table, and optionally its schema. Changing it later renames the table; see [Renaming tables](/migrations/renaming-tables). |
 | `HasPeriodStart(column)`, `HasPeriodEnd(column)` | Names the period columns. |
 | `Exclude(property)` | Leaves a property out of the history; see below. |
+| `WithDbSessionUser()` | Adds the `db_session_user` audit column; see [Change context](/writing/change-context#database-session-user). |
 
 ## Excluding properties
 

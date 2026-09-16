@@ -107,6 +107,27 @@ public sealed class OrphanedHistoryColumnTests
     }
 
     [Fact]
+    public void Removing_WithDbSessionUser_keeps_the_column_as_a_nullable_orphan()
+    {
+        // DESIGN.md D16: db_session_user is opt-in (TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser),
+        // but once shipped in a migration it is a real history column like any other — removing the
+        // opt-in must not turn into a DropColumn any more than removing a versioned property would
+        // (golden rule 3). AddDbSessionUserColumn simply stops adding it, and the same generic
+        // RestoreOrphanedColumns pass that re-materializes any other removed column picks it up.
+        var previous = BuildModel(b => b.Entity<Policy>().IsTemporal(t => t.WithDbSessionUser()));
+
+        var current = BuildModel(
+            b => b.Entity<Policy>().IsTemporal(),
+            previousSnapshot: previous);
+
+        var dbSessionUser = current.HistoryEntityType(typeof(Policy)).FindProperty("db_session_user");
+
+        Assert.NotNull(dbSessionUser);
+        Assert.True(dbSessionUser.IsNullable);
+        Assert.True(dbSessionUser[HindsightAnnotationNames.Orphaned] is true);
+    }
+
+    [Fact]
     public void The_differ_emits_no_drop_on_the_history_table_when_a_property_is_removed()
     {
         var previous = BuildModel(b =>

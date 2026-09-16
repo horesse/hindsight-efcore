@@ -101,6 +101,42 @@ them like a `created_by` column that your application sets on an ordinary table.
 This is a deliberate trade-off: Hindsight assumes the application's database credentials are not
 shared with untrusted parties, and that direct access to the production database is controlled and
 audited by other means. If your threat model includes people with legitimate database access who must
-not be able to forge `changed_by`, add an independent control, such as row-level security or an
-external audit of direct database access. Recording PostgreSQL's own `session_user` as an extra column
-is an open question in the [design decisions](/reference/design) (D16).
+not be able to forge `changed_by`, add an independent control, such as row-level security, an external
+audit of direct database access, or the `db_session_user` column below.
+
+## Database session user
+
+`WithDbSessionUser()` adds a second, defense-in-depth column PostgreSQL itself guarantees instead of
+the application asserting:
+
+<<< @/snippets/Configuration.cs#with-db-session-user
+
+| column | type | populated by |
+|---|---|---|
+| `db_session_user` | `text not null default session_user` | PostgreSQL's own `session_user`: the role that authenticated the connection which executed the write |
+
+Unlike `changed_by` and the rest of the change context, `db_session_user` **cannot be forged** with
+`set_config` — it is filled in by PostgreSQL's own `DEFAULT session_user`, immune to anything the
+application or an attacker sends over the connection, in both writer modes and for
+`ExecuteUpdate`/`ExecuteDelete`/raw SQL under the trigger writer alike.
+
+- It answers a different question than `changed_by`: *which database role actually executed this
+  write*, not *which end user*. A pooled application connection's `session_user` is typically one
+  shared service role, so in practice `db_session_user` mostly confirms "yes, this came in through the
+  app's own role" — its value is in the negative case, catching a write that did *not*.
+- Only `session_user` is captured, never `current_user`. They differ under `SET ROLE` /
+  `SECURITY DEFINER` — `session_user` is who authenticated and cannot change without re-authenticating;
+  `current_user` can change mid-session, which would let it be spoofed the same way `changed_by` can.
+- It is **opt-in** (`IsTemporal(t => t.WithDbSessionUser())`), not part of the base history columns,
+  because it is not universally useful — see the pooled-connection point above — and because it is the
+  one history column shaped around PostgreSQL's own authentication rather than the application's.
+- It does not defend against someone who genuinely holds the application's own database credentials and
+  uses them from `psql` instead of through the app: `session_user` is unchanged either way. It only
+  catches a write that came in under a *different* role entirely.
+- On `Version<T>.DbSessionUser` it reads back `null` when the entity did not opt in — the column does
+  not exist on that entity's history table at all — never `null` for an opted-in entity's own stored
+  rows, since the database's `not null` constraint guarantees a value on every one of them.
+
+See [design decisions](/reference/design) (D16) for the full trust-model write-up and the mechanism
+that makes this "free": the column is populated by PostgreSQL's own `DEFAULT`, not by anything
+`HistoryRowWriter` or the trigger function explicitly writes.

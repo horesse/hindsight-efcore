@@ -31,6 +31,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     private const string TimestamptzColumnType = "timestamp with time zone";
     private const string PeriodEndDefaultSql = "'infinity'::timestamp with time zone";
     private const string ExtraColumnType = "jsonb";
+    private const string DbSessionUserDefaultSql = "session_user";
 
     // The history entity's identity in the model (DESIGN.md D15) for a source becoming temporal for
     // the first time: stable across a later table rename, unlike the table name itself. Styled after
@@ -223,6 +224,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             [HindsightHistoryColumns.CorrelationId] = "the change context",
             [HindsightHistoryColumns.Reason] = "the change context",
             [HindsightHistoryColumns.Extra] = "the change context",
+            [HindsightHistoryColumns.DbSessionUser] = "the db_session_user audit column (DESIGN.md D16), whether or not this entity opts into it",
         };
 
         var periodColumns = new HashSet<string>(StringComparer.Ordinal) { periodStart, periodEnd };
@@ -293,6 +295,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         MirrorEntityColumns(historyBuilder, source);
         AddPeriodColumns(historyBuilder, source);
         AddContextColumns(historyBuilder);
+        AddDbSessionUserColumn(historyBuilder, source);
         AddSurrogateKey(historyBuilder);
         AddVersionIndex(historyBuilder, source);
         return historyBuilder;
@@ -743,6 +746,23 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
         var extra = AddScalarColumn(historyBuilder, HindsightHistoryColumns.Extra, typeof(string), nullable: true);
         extra?.HasColumnType(ExtraColumnType);
+    }
+
+    // DESIGN.md D16. Opt-in only (TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser), unlike every
+    // other column AddContextColumns adds. A sibling method rather than a branch inside
+    // AddContextColumns, for the same reason the spike that proved this column is "free" called out:
+    // the column is populated by PostgreSQL's own DEFAULT session_user, not by either writer's explicit
+    // column list, so nothing here — or in HistoryRowWriter / HistoryTriggerSqlGenerator — needs to know
+    // about it beyond declaring it on the history entity type with that default and NOT NULL.
+    private static void AddDbSessionUserColumn(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
+    {
+        if (source[HindsightAnnotationNames.HasDbSessionUser] is not true)
+        {
+            return;
+        }
+
+        var dbSessionUser = AddScalarColumn(historyBuilder, HindsightHistoryColumns.DbSessionUser, typeof(string), nullable: false);
+        dbSessionUser?.HasDefaultValueSql(DbSessionUserDefaultSql);
     }
 
     private static void AddSurrogateKey(IConventionEntityTypeBuilder historyBuilder)

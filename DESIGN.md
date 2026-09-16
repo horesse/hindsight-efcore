@@ -163,6 +163,7 @@ bypass history; this is documented, not worked around. An analyzer diagnostic ma
 | `correlation_id` | `text null` | |
 | `reason` | `text null` | |
 | `extra` | `jsonb null` | |
+| `db_session_user` | `text not null default session_user` | **opt-in only** (`IsTemporal(t => t.WithDbSessionUser())`); absent unless the entity opts in — see D16 |
 
 Indexes: `(pk columns, valid_from desc)` and GiST on `tstzrange(valid_from, valid_to)` (D14).
 No FKs from history to the main table (parent may be deleted). All `not null` / unique / check
@@ -746,7 +747,7 @@ or the grandfathering lookup needs to survive the *source* entity itself being r
 type mapped onto the same table) — untested, and likely already broken the same way any EF entity
 identity change is.
 
-## D16. Change-context trust model, and a proposed `session_user` audit column — open question
+## D16. Change-context trust model, and the opt-in `db_session_user` audit column
 
 **Documented, 2026-09-12** (see `docs/writing/change-context.md` → Trust model): the change-context
 columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`) are not tamper-resistant
@@ -760,22 +761,64 @@ D3 (the application is trusted; the trigger cannot itself authenticate anything)
 out for a reader coming from the "audit trail" / "who did it" framing D5 uses. Fixed as a docs-only
 change; no code changed.
 
-**Open question this entry exists to record: should Hindsight also capture something PostgreSQL itself
-guarantees, as a second, defense-in-depth column?**
+**Should Hindsight also capture something PostgreSQL itself guarantees, as a second, defense-in-depth
+column? Resolved, 2026-09-17: yes, as an opt-in column.**
 
 `session_user` (no-arg, stable for the life of a session, guaranteed by PostgreSQL's own connection
-authentication — immune to `set_config`) is the natural candidate. Proposed shape, if this goes ahead:
-an **additional**, always-populated fixed history column —
-`db_session_user text not null default session_user` — alongside (not replacing) the existing
-application-supplied columns. It answers a different question than `changed_by`: "which database
-role/connection actually executed this write", not "which end user". The two are usually different
-values in practice — a pooled application connection's `session_user` is typically one shared service
-role, so `db_session_user` mostly tells you "yes, this came in through the app's own role" rather than
-naming a human; its value is in the negative case, catching a write that did *not* come through that
-role at all. Not a substitute for the docs fix above: it narrows what an attacker with the
-application's own stolen credentials can fake (nothing — `session_user` is exactly the role they
-authenticated as), but does nothing against someone who genuinely holds the application's credentials
-and abuses them from `psql` instead of through the app, since `session_user` is unchanged either way.
+authentication — immune to `set_config`) is the natural candidate. Shipped shape:
+an **additional** fixed history column — `db_session_user text not null default session_user` —
+alongside (not replacing) the existing application-supplied columns. It answers a different question
+than `changed_by`: "which database role/connection actually executed this write", not "which end
+user". The two are usually different values in practice — a pooled application connection's
+`session_user` is typically one shared service role, so `db_session_user` mostly tells you "yes, this
+came in through the app's own role" rather than naming a human; its value is in the negative case,
+catching a write that did *not* come through that role at all. Not a substitute for the docs fix above:
+it narrows what an attacker with the application's own stolen credentials can fake (nothing —
+`session_user` is exactly the role they authenticated as), but does nothing against someone who
+genuinely holds the application's credentials and abuses them from `psql` instead of through the app,
+since `session_user` is unchanged either way.
+
+**Final shape, resolving the two open points below:**
+
+1. **Opt-in, not part of the base column set (D5).** `IsTemporal(t => t.WithDbSessionUser())`
+   (`TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser`, gated by the
+   `HindsightAnnotationNames.HasDbSessionUser` entity-type annotation) — resolving "base column set or
+   opt-in" in favor of opt-in, per the reasoning above: a pooled connection's `session_user` is usually
+   one shared service role, not a human identity, so the column is not universally useful and every
+   history table should not pay for it by default.
+2. **`current_user` is not captured, only `session_user`.** They differ under `SET ROLE` /
+   `SECURITY DEFINER` functions — `session_user` is who actually authenticated, `current_user` is whose
+   privileges the statement currently runs with. `session_user` is the one that matters for this threat
+   model since it cannot be changed within a session without re-authenticating; `current_user` can be,
+   which would let exactly the kind of `psql`-wielding credential holder this column cannot stop also
+   spoof the extra column, defeating its own purpose.
+3. **The column name is reserved unconditionally**, in `HistoryEntityTypeConvention
+   .ValidateReservedColumnNames`'s `reservedColumns` — whether or not a given entity opts in — so a
+   source property named `db_session_user` is rejected the same way `reason` or `extra` are, rather than
+   working today and breaking silently the day the entity opts in later.
+4. **`Version<TEntity>.DbSessionUser`** exposes it to `History<T>()` callers: `string?`, `null` when the
+   entity did not opt in (the column does not exist on its history table in that case — there is no
+   precedent among the other context columns for a *conditionally present* one, since `changed_by` and
+   friends are always on the table and only their per-row *value* is nullable; here the column itself is
+   sometimes absent, so `null` on `Version<T>` does double duty for "no provider value" on the base
+   columns and "opted out" on this one). `HistoryQueryRootRewriter.WrapInVersion` binds it to
+   `EF.Property<string>(h, "db_session_user")` only when the history entity type actually has that
+   property, else to a literal `null`, so `History<T>()` never throws for an entity that did not opt in.
+5. **Migration generation.** `HindsightMigrationsSqlGenerator.BuildModel`'s `fixedColumns` set (the one
+   that tells the Trigger-mode function builder which history columns are *not* mirrored entity columns)
+   also excludes `db_session_user` unconditionally, for the same reason as point 3: without it, an
+   opted-in entity's trigger function would try to read a `NEW.db_session_user` off the *main* table,
+   which does not exist there. An entity newly calling `WithDbSessionUser()` gets an ordinary
+   `ALTER TABLE ... ADD COLUMN db_session_user text NOT NULL DEFAULT session_user` in its next migration
+   — the same add-column path any other new fixed column would use — and existing rows are backfilled
+   with whichever `session_user` ran the migration (PostgreSQL evaluates a non-constant `DEFAULT` once
+   per `ALTER TABLE ADD COLUMN`, not per pre-existing row), consistent with D6 treating pre-existing gaps
+   as immutable history rather than attempting a retroactive backfill.
+6. **Opting back out later does not drop the column.** `AddDbSessionUserColumn` simply stops adding the
+   property; the already-generic `RestoreOrphanedColumns` pass (the same one that keeps a removed
+   *entity* property's history column alive, D6) sees it missing from the freshly built history entity
+   type but present in the previous snapshot, and re-adds it nullable and tagged `Orphaned` — no
+   special-casing needed for this column, golden rule 3 holds for free.
 
 **Investigation (spike, not shipped — reverted after confirming the mechanism):** is
 `DEFAULT session_user` really "free" — no interceptor or trigger-function code change at all?
@@ -812,44 +855,30 @@ so a column absent from that list is, from Npgsql's point of view, simply not me
 applies its `DEFAULT` exactly as it would for any manual `INSERT` that omits a column. Same reasoning
 for the trigger's plpgsql `INSERT`.
 
-**What is *not* free, and why this is not implemented in this PR:** the column addition is a real,
-permanent public-surface and schema change, not a code-path trick:
-- a new entry in `HindsightHistoryColumns.cs` and a new fixed column documented in D5's table;
-- `Version<TEntity>` (the public read-side type, `Version.cs`) needs a new property (e.g.
-  `DbSessionUser`) to expose it to `History<T>()` callers, which is a new public API surface: XML doc,
-  `PublicAPI.Unshipped.txt` entry, an update to every article that lists `Version<T>`'s members;
-  `HistoryQueryRootRewriter`'s projection needs to bind it, same as the other context columns;
-- every DDL Verify snapshot (`TriggerDdlTests` and friends) and every test that asserts a history
-  table's exact column set needs updating to include the new column — not optional, since those tests
-  exist specifically to catch an undocumented column drift;
-- a migration-generation concern the spike did not need to solve: existing history tables predating
-  this column need the same `ADD COLUMN ... DEFAULT session_user` migration path already used for any
-  other newly-added fixed column, plus deciding whether backfilling existing rows is in scope (out of
-  scope for v1, consistent with D6 treating pre-existing gaps as immutable history) or left `NULL` for
-  rows written before the migration — the column would need to be nullable on the actual history table
-  even though new rows always populate it, unless a one-time backfill runs as part of the same
-  migration.
+**What the spike said was *not* free, and how the shipped PR addressed each point:** the column addition
+is a real, permanent public-surface and schema change, not just a code-path trick:
+- a new entry in `HindsightHistoryColumns.cs` (`DbSessionUser = "db_session_user"`), documented as an
+  opt-in fixed column in D5's table;
+- `Version<TEntity>.DbSessionUser` (point 4 above) is the new public read-side property; XML doc,
+  `PublicAPI.Unshipped.txt` entry, and `docs/querying/history.md` / `docs/writing/change-context.md`
+  updated; `HistoryQueryRootRewriter`'s projection binds it conditionally, per point 4;
+- the existing DDL Verify snapshot (`TriggerDdlTests`) and every test asserting a history table's exact
+  column set needed no change, because none of them opt in — `db_session_user` only appears on a history
+  table whose entity calls `WithDbSessionUser()`; the opt-in model-building tests
+  (`HistoryEntityTypeConventionTests`) and the writer-mode integration tests (`DbSessionUserTests`, both
+  `HistoryWriter` modes plus `ExecuteUpdate`/`ExecuteDelete`/raw SQL under Trigger) cover the new column
+  directly instead;
+- the migration-generation concern (point 5 above) — existing history tables predating this column need
+  `ADD COLUMN ... DEFAULT session_user` when an entity newly opts in — is handled by the ordinary
+  add-column differ path; no backfill runs, consistent with D6.
 
-Per CLAUDE.md rule 9, this stays an open question pending a maintainer decision on:
-1. whether the audit-trail value (catching a write that bypassed the application's role entirely) is
-   worth a new permanent column on every history table, given it does not defend against the more
-   likely threat (a legitimate holder of the application's credentials using them outside the app); and
-2. the exact public shape — column name (`db_session_user` vs. something else), whether `current_user`
-   is also worth capturing alongside `session_user` (they differ under `SET ROLE` / `SECURITY DEFINER`
-   functions — `session_user` is who actually authenticated, `current_user` is whose privileges the
-   statement is currently running with; `session_user` is the one that matters for this threat model
-   since it cannot be changed within a session without re-authenticating), and whether it belongs in the
-   base column set or as an opt-in (`IsTemporal(t => t.WithDbSessionUser())`) given it is not
-   universally wanted and (unlike everything else in D5) is PostgreSQL-authentication-shaped rather than
-   application-shaped.
+The audit-trail-value question (is a write that bypassed the application's role entirely worth a column
+on every history table, given it does not defend against the more likely threat of a legitimate
+credential holder abusing them outside the app) is left to each caller: opt-in means the caller who
+decides it is worth it pays for it, and the caller who does not is unaffected — the trust-model
+docs above (`docs/writing/change-context.md` → Trust model) explain the trade-off either way.
 
 ## Open questions (resolve in the spike, then move up)
-
-- **D16**: add a `db_session_user` (or similarly named) column, populated by PostgreSQL's own
-  `DEFAULT session_user`, as a defense-in-depth audit column alongside the existing application-supplied
-  change-context columns? The mechanism is confirmed free (no interceptor/trigger code change); the
-  decision pending is whether the feature is wanted at all, its exact column name, and whether
-  `current_user` should also be captured — see D16 for the full write-up.
 
 ### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12
 

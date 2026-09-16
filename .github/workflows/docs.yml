@@ -19,6 +19,8 @@ on:
       - "docs/**"
       - "DESIGN.md"
       - "samples/InsuranceSample/**"
+      - "samples/ProductCatalogSample/**"
+      - "samples/TaskTrackerSample/**"
       - "tests/**/*.verified.sql"
       - ".github/workflows/docs.yml"
   workflow_call:

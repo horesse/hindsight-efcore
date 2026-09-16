@@ -134,6 +134,13 @@ because old versions still hold data in it. Renames produce a new column; the ol
 - Providers other than PostgreSQL / Npgsql.
 - Any UI.
 
+## Samples
+
+Two runnable, no-setup demos - each starts its own disposable PostgreSQL container:
+`dotnet run --project samples/ProductCatalogSample` (query API) and
+`dotnet run --project samples/TaskTrackerSample` (Trigger mode, change context). See
+[Samples](https://horesse.github.io/hindsight-efcore/latest/introduction/samples) for what each shows.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Design decisions and their reasons are in [DESIGN.md](DESIGN.md);

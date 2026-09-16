@@ -22,3 +22,14 @@ is an ordinary EF Core index, which EF Core renames itself.)
 
 This works because a history table's identity in the model does not depend on its name. Upgrading
 Hindsight without renaming anything produces no migration changes.
+
+## Moving a table to a different schema
+
+Change the schema in `ToTable("name", "schema")` or `UseHistoryTable("name", "schema")`, and the
+migration moves it with `ALTER TABLE ... SET SCHEMA`. History keeps growing under the new schema, the
+same way a name-only rename keeps it growing under the new name.
+
+PostgreSQL moves every object a table owns — its indexes included — into the new schema automatically
+when the table moves, so the period-range index needs no DDL of its own for this. The trigger function
+is a standalone object, unaffected by the table's own move, and is recreated under the new schema the
+same way it is for a name change.

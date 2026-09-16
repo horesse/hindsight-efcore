@@ -13,7 +13,7 @@ them and generates their DDL along with the main table's. One rule decides *what
 | add a property | column added | column added; existing versions get `NULL` |
 | remove a property | column dropped | column **kept**, nullable |
 | rename a property | column renamed | new column added; the old one is **kept**, nullable |
-| change a property's type | column altered | column altered |
+| change a property's type, precision/scale, max length or converter (same column name) | — | **rejected** |
 | remove a primary-key property | — | **rejected** |
 
 ## Adding a property
@@ -45,8 +45,21 @@ wrong would silently rewrite old versions.
 
 ## Changing a property's type
 
-Both tables get the `ALTER COLUMN`. If the conversion can fail on existing data, as when narrowing a
-type, the migration fails on the history table first. Fix the data, or widen the type instead.
+Rejected with `InvalidOperationException` when the model is built, for a property whose store type,
+precision/scale, max length or value converter changed while its column stayed under the same name.
+
+The history table mirrors a live column's type onto the same column name, so altering it in place would
+touch the history table too — and unlike removing or renaming a property, there is no "keep the old one"
+fallback here, because the column never leaves the model: the change would be a genuine `ALTER COLUMN`
+against rows that may hold values only valid under the old type (`text` history rows that are not valid
+JSON, altered to `jsonb`, are a concrete way this fails outright).
+
+::: tip
+Give the property a different column name instead. The old column becomes a nullable orphan — the same
+outcome as [renaming a property](#renaming-a-property) — and the new one starts clean under the new
+type. If the physical column really must change type in place, write that migration by hand; Hindsight
+never will.
+:::
 
 ## Removing a primary-key property
 

@@ -11,7 +11,7 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.4" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
   </ItemGroup>
 
   <!-- Build / packaging -->
@@ -22,9 +22,9 @@
 
   <!-- Tests -->
   <ItemGroup>
-    <PackageVersion Include="xunit.v3" Version="4.0.0" />
-    <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.0" />
-    <PackageVersion Include="Verify.XunitV3" Version="32.0.0" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.1" />
+    <PackageVersion Include="Verify.XunitV3" Version="33.0.2" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <!-- Not a supported Hindsight provider (README.md non-goals) - used only by
          HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. Pinned to
@@ -34,7 +34,7 @@
          graph pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11, which has a known high-severity advisory
          (GHSA-2m69-gcr7-jv3q). Pinned directly (see the matching PackageReference in
          Hindsight.Tests.csproj) to the patched version instead of raising the whole EF Core floor. -->
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 
   <!-- Benchmarks -->

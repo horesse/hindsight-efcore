@@ -305,15 +305,28 @@ internal sealed class HindsightMigrationsSqlGenerator(
             }
         }
 
-        // The history table itself was renamed: in Trigger mode, its trigger function's own name and its
-        // INSERT INTO target both embed the OLD table name literally, baked in at the last CreateFunction
-        // (D3) — left alone, the next write would fail with "relation ... does not exist". Drop the stale
-        // function (CASCADE takes the trigger that rode along with the table rename) and recreate both
-        // under the new name, only now that every rename in this migration (including the main table's,
-        // if it has one of its own) has already run. Then, in both writer modes, rename the period-range
-        // index: PostgreSQL's ALTER TABLE ... RENAME leaves it under its old, now-stale name (verified
-        // against real PostgreSQL) — left alone, that stale name becomes a landmine for the next entity
-        // whose default-derived history table name happens to collide with it.
+        // The history table itself was renamed — its name, its schema, or both (a RenameTableOperation
+        // covers a pure schema move too: same Name, only NewSchema differs). In Trigger mode, its trigger
+        // function's own name and its INSERT INTO target both embed the OLD table name literally, baked
+        // in at the last CreateFunction (D3) — left alone, the next write would fail with "relation ...
+        // does not exist". Drop the stale function (CASCADE takes the trigger that rode along with the
+        // table rename) and recreate both under the new name/schema, only now that every rename in this
+        // migration (including the main table's, if it has one of its own) has already run. A function is
+        // its own standalone object, independent of the table that references it from a trigger — moving
+        // the table's schema does not move the function — so the function is correctly found (to drop)
+        // under the OLD schema and created under the NEW one.
+        //
+        // Then, in both writer modes, rename the period-range index: PostgreSQL's ALTER TABLE ... RENAME
+        // leaves it under its old, now-stale name (verified against real PostgreSQL) — left alone, that
+        // stale name becomes a landmine for the next entity whose default-derived history table name
+        // happens to collide with it. Unlike the function, an index is NOT a standalone object: ALTER
+        // TABLE ... SET SCHEMA moves it (and every other object owned by the table) into the new schema
+        // together with the table itself, automatically, with no DDL of its own — confirmed against real
+        // PostgreSQL: by the time this statement runs (after the table's own RenameTableOperation, earlier
+        // in this same migration), the index already lives in the NEW schema even though it kept its OLD
+        // name. So, unlike the function drop above, the index must be located under the NEW schema
+        // (model.HistorySchema) — looking it up under the old one fails with "relation ... does not exist"
+        // for a migration that changes schema, whether or not it also changes the name.
         foreach (var (oldSchema, oldName, model) in renamedHistoryTables)
         {
             if (byHistoryTable.TryGetValue((model.HistorySchema, model.HistoryTable), out var trigger))
@@ -332,10 +345,19 @@ internal sealed class HindsightMigrationsSqlGenerator(
                 });
             }
 
-            result.Add(new SqlOperation
+            // A pure schema move (RenameTableOperation.Name unchanged, only NewSchema differs) needs no
+            // ALTER INDEX at all: the index's name is still exactly IndexName(oldName) == IndexName(model.
+            // HistoryTable), and PostgreSQL already relocated it with the table. Renaming an index to its
+            // own current name fails ("relation ... already exists", verified against real PostgreSQL) —
+            // it is a rename, not an idempotent "ensure named" operation.
+            if (!string.Equals(oldName, model.HistoryTable, StringComparison.Ordinal))
             {
-                Sql = HistoryIndexSqlGenerator.RenamePeriodRangeIndex(oldName, oldSchema, model.HistoryTable, sqlGenerationHelper),
-            });
+                result.Add(new SqlOperation
+                {
+                    Sql = HistoryIndexSqlGenerator.RenamePeriodRangeIndex(
+                        oldName, model.HistorySchema, model.HistoryTable, sqlGenerationHelper),
+                });
+            }
         }
 
         // The versioned column set changed: rebuild the function body once, after the column DDL, for

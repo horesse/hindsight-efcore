@@ -309,6 +309,8 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         var historyTableName = ResolveHistoryTableName(source);
         var historySchema = (string?)source[HindsightAnnotationNames.HistoryTableSchema] ?? source.GetSchema();
 
+        ValidateNoStoreFacetChanges(source, snapshotModel?.FindEntityType(historyIdentityName));
+
         var historyBuilder = modelBuilder.SharedTypeEntity(historyIdentityName, typeof(Dictionary<string, object>));
         if (historyBuilder is null)
         {
@@ -421,6 +423,107 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         {
             target.HasScale(scale);
         }
+    }
+
+    // DESIGN.md D6 (extended). MirrorEntityColumns re-declares a live column under its existing name on
+    // every build, so a source property that changed its store shape since the previous snapshot — a
+    // different HasColumnType, a different HasConversion, a widened/narrowed HasPrecision/HasScale/
+    // HasMaxLength — looks identical to an untouched column from the differ's point of view: same
+    // identity, same name, just different facets on the history side. The differ then emits a genuine
+    // AlterColumnOperation against the history table, which golden rule 3 forbids (a generated migration
+    // never destroys or reshapes history) and which can fail or silently corrupt values that were valid
+    // under the old type (e.g. `text` history rows that are not valid JSON, altered to `jsonb`). Reject
+    // it here, the same way a removed primary-key column is rejected, instead of letting it reach the
+    // differ. Compared against the *previous snapshot's* history property (not the current one, which
+    // this same convention is about to rebuild from the live source) — the one column set that actually
+    // reflects what is physically still in the history table today.
+    private static void ValidateNoStoreFacetChanges(IConventionEntityType source, IEntityType? snapshotHistory)
+    {
+        if (snapshotHistory is null)
+        {
+            return;
+        }
+
+        foreach (var property in source.GetProperties())
+        {
+            if (property[HindsightAnnotationNames.IsExcluded] is true)
+            {
+                continue;
+            }
+
+            var columnName = property.GetColumnName();
+            if (columnName is null)
+            {
+                continue;
+            }
+
+            var previous = snapshotHistory.FindProperty(columnName);
+            if (previous is null || previous[HindsightAnnotationNames.Orphaned] is true)
+            {
+                // Brand new column (the "add a property" case), or the name only exists today as an
+                // orphan (e.g. reused after an earlier remove) — nothing live to compare against.
+                continue;
+            }
+
+            if (!StoreFacetsMatch(property, previous))
+            {
+                throw new InvalidOperationException(
+                    $"Entity '{source.DisplayName()}' is temporal and property '{property.Name}' (column "
+                    + $"'{columnName}') changed its store type, precision/scale, max length or value "
+                    + "converter since the last migration. Hindsight mirrors a live column's type onto the "
+                    + "history table under the same name (DESIGN.md D2), so this would alter an existing "
+                    + "history column in place — which DESIGN.md D6 and golden rule 3 forbid, since it can "
+                    + "fail or silently reshape values that history already holds under the old type. Give "
+                    + "the property a different column name with HasColumnName(...) instead: the old column "
+                    + "is kept as a nullable orphan, exactly like a rename (DESIGN.md D6), and the new one "
+                    + "starts clean under the new type. If the physical column truly must change type in "
+                    + "place, write that migration by hand.");
+            }
+        }
+    }
+
+    // Facets compared the same way CopyStoreFacets copies them, so "no change" here really does mean the
+    // physical column shape is unchanged. Value converters are compared by their resulting provider CLR
+    // type rather than by instance, since a fresh model build always constructs a new converter instance
+    // even when its configuration did not change; falling back to the property's own ClrType (with the
+    // Nullable<T> wrapper MirrorEntityColumns adds on the history side stripped, so a value type compares
+    // equal to itself across the two sides) catches a plain CLR type change with neither a converter nor
+    // an explicit column type configured.
+    //
+    // GetColumnType() is compared only when BOTH sides return a value. `source` here is still an
+    // IConventionProperty mid-model-finalizing (this convention runs as part of that pass), and an
+    // unconfigured property's *default* store type (e.g. plain `int` -> "integer") is only resolved by
+    // relational type mapping once the model is fully built — the same reason CopyStoreFacets itself only
+    // calls HasColumnType when the source already has an explicit value. `previous` is read from an
+    // already fully-built snapshot IModel, so an unconfigured column there legitimately shows its
+    // resolved default. Comparing "unresolved null" against "resolved default" would be a false
+    // mismatch on essentially every column nobody ever called HasColumnType on; skipping the comparison
+    // when either side is null is safe because CopyStoreFacets would not have set an explicit type on the
+    // history column either, so the differ resolves both the old and the new mirrored column through the
+    // exact same default mapping from the (compared below) ClrType and reaches the same physical type.
+    private static bool StoreFacetsMatch(IReadOnlyProperty current, IReadOnlyProperty previous)
+    {
+        var currentType = current.GetColumnType();
+        var previousType = previous.GetColumnType();
+        if (currentType is not null && previousType is not null
+            && !string.Equals(currentType, previousType, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return ResolvedStoreClrType(current) == ResolvedStoreClrType(previous)
+            && current.GetMaxLength() == previous.GetMaxLength()
+            && current.IsUnicode() == previous.IsUnicode()
+            && current.GetPrecision() == previous.GetPrecision()
+            && current.GetScale() == previous.GetScale();
+    }
+
+    private static Type ResolvedStoreClrType(IReadOnlyProperty property)
+    {
+        var type = property.GetValueConverter()?.ProviderClrType
+            ?? property.GetProviderClrType()
+            ?? property.ClrType;
+        return Nullable.GetUnderlyingType(type) ?? type;
     }
 
     // DESIGN.md D6. A column present on the history table in the previous model snapshot but no longer

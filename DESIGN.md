@@ -240,6 +240,28 @@ a delete is meant to be read (D12).
   generated DDL to real PostgreSQL and inspects `information_schema`).
 - Column renamed → new column in history, old one stays as a nullable orphan (same mechanism). No
   rename magic.
+- **Column's store type, precision/scale, max length or value converter changed while its column name
+  stayed the same → rejected, added after a spike, 2026-09-16.** `MirrorEntityColumns` re-declares a
+  live column under its existing name on every build, so from the differ's point of view a column whose
+  facets changed looks identical to an untouched one — same identity, same name — and the differ emits a
+  genuine `AlterColumnOperation` against the history table. Unlike a rename (previous bullet), there is
+  no "keep the old one as an orphan" fallback here, because the column *name* did not change — the
+  differ would alter the physical column in place, which golden rule 3 forbids (it can fail or silently
+  reshape values a history row holds under the old type; `text` → `jsonb` is a concrete example: it
+  fails outright against any existing history row that is not valid JSON). `HistoryEntityTypeConvention
+  .ValidateNoStoreFacetChanges` compares each live column's resolved facets (`GetColumnType()`,
+  converter/provider CLR type, max length, unicode, precision, scale) against the *previous snapshot's*
+  history property of the same name and throws `InvalidOperationException` if they differ, naming the
+  fix: give the property a different column name instead (the old column is then orphaned exactly like a
+  rename), or write the type change as a hand-authored migration. `GetColumnType()` is compared only
+  when both sides are non-null: `source` here is still mid model-finalizing (this convention's own pass),
+  and an *unconfigured* property's default store type (e.g. plain `int` → `integer`) is only resolved by
+  relational type mapping once the model is fully built, while `previous` is read from an already
+  fully-built snapshot `IModel` — comparing "not yet resolved" against "resolved default" is a false
+  mismatch on essentially every column nobody ever called `HasColumnType` on, so it is skipped rather
+  than guessed at; `ResolvedStoreClrType`'s `ClrType` fallback (used when neither a converter nor an
+  explicit column type is configured) still catches a plain CLR type change either way. Covered by
+  `SchemaEvolutionModelTests`.
 - `IsTemporal()` removed from an entity entirely (or the entity type removed from the model
   altogether) → **the whole history table is kept, tagged orphaned — extended to whole entity types,
   2026-09-11.** The mechanism above only orphans a *column* whose source property disappeared from an
@@ -721,6 +743,29 @@ existing `HistoryEntityTypeConventionTests` / `OrphanedHistoryColumnTests` /
 `Hindsight:HistoryEntityType` annotation — the same idiom production code already used — rather than
 assuming the identity equals the table name, which was only ever true by construction, not by
 contract).
+
+**A `RenameTableOperation` also covers a pure schema move** (`Name` unchanged, only `NewSchema` set) —
+found and fixed 2026-09-16 while adding schema-rename test coverage; not previously exercised by any
+test in this section, which only varied table names. The fix above ("Rewrite handles
+`RenameTableOperation`") already gets the trigger function right for this case for free: a function is
+its own standalone object, never moved by `ALTER TABLE ... SET SCHEMA`, so locating it under the *old*
+schema to drop it and creating the replacement under the *new* one (from the live trigger model) was
+already correct. The period-range index rename was not: unlike a function, `ALTER TABLE ... SET SCHEMA`
+moves every object the table owns — its indexes included — into the new schema automatically, with no
+DDL of its own (confirmed against real PostgreSQL). By the time the deferred `ALTER INDEX ... RENAME`
+runs (after the table's own `RenameTableOperation`, earlier in the same migration), the index already
+lives in the *new* schema even though it kept its *old* name — so locating it under the old schema, as
+the original (name-only-rename-only) implementation did, fails with `relation ... does not exist` for
+any migration that changes schema. Fixed by locating the index under the *current* model's schema
+instead of the operation's old one. A second, related bug surfaced once the first was fixed: a *pure*
+schema move (table name unchanged) does not need an index rename at all — the index's name was never
+stale, only its schema (moved automatically, same as above) — and issuing `ALTER INDEX x RENAME TO x`
+fails with `relation ... already exists` (renaming to one's own current name is a self-conflict in
+PostgreSQL, not an accepted no-op). Fixed by skipping the `ALTER INDEX` entirely when the history table's
+name did not change. Covered by `SchemaRenameTriggerDdlTests` (Testcontainers: moves a temporal entity's
+main table to a new schema with default history naming, applies the generated DDL to real PostgreSQL,
+and confirms a write after the move still produces a history row — this would have failed with either
+bug above before the fix).
 
 Revisit if: EF Core's differ starts pairing shared-type entities by something other than their `Name`;
 or the grandfathering lookup needs to survive the *source* entity itself being renamed (a different CLR

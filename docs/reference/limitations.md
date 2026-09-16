@@ -18,6 +18,7 @@ Each of these fails loudly, so you find out during development rather than from 
 | Inheritance hierarchies | rejected at model build | map the temporal entity on its own |
 | Restoring an entity to an old version | saving a historical snapshot throws `InvalidOperationException` | [copy the values](/querying/restrictions#history-is-read-only) onto the current entity |
 | Removing a primary-key property of a temporal entity | `InvalidOperationException` at model build | keep it, or remove `IsTemporal()` |
+| Changing a property's store type, precision/scale, max length or converter under the same column name | `InvalidOperationException` at model build | [give it a different column name](/migrations/schema-evolution#changing-a-property-s-type) instead |
 | Database providers other than Npgsql | `InvalidOperationException` on first use | none planned |
 | Seeding history for rows that exist before `IsTemporal()` | not automatic | [seed it in the migration](/migrations/existing-tables#making-an-existing-table-temporal) |
 | Retention and partitioning of history | history grows without bound | planned for a later major version; the schema allows it without migrating existing data |

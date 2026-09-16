@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ProductCatalogSample</RootNamespace>
+    <!-- Samples are not held to library-grade analysis. -->
+    <AnalysisLevel>latest-minimum</AnalysisLevel>
+    <!-- CA1861: `dotnet ef migrations add` scaffolds CreateIndex(descending: new[] {...}) itself; the
+         analyzer has no code fixer for it and the array is built once, at migration time, not "repeatedly". -->
+    <NoWarn>$(NoWarn);CS1591;CA1303;CA1305;CA2007;CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
+    <!-- Not a runtime dependency of Hindsight itself - this sample spins up its own disposable
+         PostgreSQL container so `dotnet run` works with no setup. -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>

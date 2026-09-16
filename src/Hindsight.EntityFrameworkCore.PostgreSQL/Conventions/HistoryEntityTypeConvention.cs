@@ -57,6 +57,24 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     {
         ArgumentNullException.ThrowIfNull(modelBuilder);
 
+        if (IsMigrationsHistoryRepositoryModel(modelBuilder.Metadata))
+        {
+            // EF Core's own IHistoryRepository.EnsureModel() builds exactly this - a model with nothing
+            // but the public HistoryRow record mapped to __EFMigrationsHistory - through this same
+            // per-context convention set, whenever it scripts or bootstraps that table in isolation. In
+            // particular, Migrator.MigrateAsync/Migrate call it to CREATE TABLE IF NOT EXISTS
+            // __EFMigrationsHistory *before* taking the migration lock, on every call, even against an
+            // already-migrated database. That model carries none of the real entity types, so every
+            // temporal entity looks like it just stopped being temporal (below) though none did - left
+            // unguarded, RestoreOrphanedHistoryEntityTypes clones every history table from the last
+            // snapshot into it, and HindsightMigrationsSqlGenerator then bakes their CreateTableOperation
+            // and version index into that same bootstrap script, which runs and commits with no
+            // corresponding row in __EFMigrationsHistory. The real locked migration path that follows
+            // still sees zero applied migrations and re-runs "Initial" for real, which re-issues
+            // CREATE TABLE for the same history table and fails with 42P07 (see MigrateAsyncTests).
+            return;
+        }
+
         var temporalEntityTypes = modelBuilder.Metadata.GetEntityTypes()
             .Where(entityType => entityType[HindsightAnnotationNames.IsTemporal] is true)
             .ToList();
@@ -80,6 +98,19 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         }
 
         RestoreOrphanedHistoryEntityTypes(modelBuilder, liveHistoryEntityTypeNames, snapshotModel);
+    }
+
+    // EF Core's HistoryRepository.EnsureModel() always builds exactly one entity type, mapped from the
+    // public Microsoft.EntityFrameworkCore.Migrations.HistoryRow record - nothing else. A real Hindsight
+    // application model, even one with every temporal entity de-temporalized, still carries its own
+    // entity types alongside whatever Hindsight added; this exact shape only ever comes from that one
+    // internal caller, so matching it precisely tells the two apart without reflecting into EF internals.
+    private static bool IsMigrationsHistoryRepositoryModel(IConventionModel model)
+    {
+        using var enumerator = model.GetEntityTypes().GetEnumerator();
+        return enumerator.MoveNext()
+            && enumerator.Current.ClrType == typeof(HistoryRow)
+            && !enumerator.MoveNext();
     }
 
     private static void ValidateTemporalEntityType(IConventionEntityType entityType)

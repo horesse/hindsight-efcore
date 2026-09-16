@@ -290,6 +290,32 @@ a delete is meant to be read (D12).
   same carve-out as the rest of golden rule 3. Covered by
   `HistoryTableRetentionOnDetemporalizeTests` (Testcontainers: applies the generated DDL to real
   PostgreSQL and confirms the table and its data survive).
+
+  **False positive against `HistoryRepository`'s own bootstrap model — fixed 2026-09-16.** The whole-
+  entity-type detection above only looks at `temporalEntityTypes` in the model being finalized; it
+  never asked whether that model was meant to describe the whole application in the first place.
+  `Database.MigrateAsync()`/`Migrate()` always call `IHistoryRepository.CreateIfNotExistsAsync()` once,
+  unconditionally, *before* taking the migration lock — including against an already-fully-migrated
+  database — to make `CREATE TABLE IF NOT EXISTS __EFMigrationsHistory` safe to race. That call builds
+  its own throwaway model containing nothing but the public `HistoryRow` record, through the exact same
+  per-context convention set `HindsightConventionSetPlugin` installs on the real `DbContext` (there is
+  no way to tell the two callers apart from inside the plugin). Every temporal entity is therefore
+  absent from `temporalEntityTypes` there — not because any of them stopped being temporal, but because
+  that model was never going to contain the application's entities at all — so the mechanism above
+  treated every history table in the last snapshot as freshly orphaned and cloned all of them into it.
+  `HindsightMigrationsSqlGenerator` then saw a real `IModel` (not `null`, unlike the SQL text this call
+  wraps for the history table itself) and appended each one's version index too, baking a full
+  `CREATE TABLE`/`CREATE INDEX` for every history table into a script that runs and commits with no
+  corresponding row in `__EFMigrationsHistory`. The real, locked migration path that follows still saw
+  zero applied migrations, re-ran the first migration for real, and failed re-creating the same history
+  table (`42P07`). Fixed by recognizing that one exact shape — `ProcessModelFinalizing` now returns
+  immediately when the model being finalized has exactly one entity type and its CLR type is
+  `Microsoft.EntityFrameworkCore.Migrations.HistoryRow` — before doing anything else; a real application
+  model, even with every temporal entity removed, still carries its own entity types alongside whatever
+  Hindsight added, so the check can't misfire the other way. Public API only: `HistoryRow` is not an
+  `.Internal` type. Covered by `MigrateAsyncTests` (Testcontainers: `Database.MigrateAsync()` against a
+  brand-new database with a real scaffolded migration, both writer modes, plus a second `MigrateAsync()`
+  against the now-current database to confirm the fast path itself still works).
 - Existing non-empty table made temporal → v1.1 (`INSERT ... SELECT` seeding the initial version).
 
 ## D7. Historical queries are always no-tracking

@@ -1,0 +1,87 @@
+name: EF Core 10.x compatibility canary
+
+# Weekly: build and test against the latest *stable* EF Core 10.x + Npgsql provider from nuget.org.
+# Directory.Packages.props pins a floor version (tested on every PR by ci.yml); this canary proves the
+# floor still holds against whatever is newest in the same major line, since NuGet treats that pin as a
+# minimum, not an exact version - consumers are free to float higher within 10.x.
+#
+# Failure opens (or updates) one issue labelled `efcore-compat`. It never blocks PRs.
+
+on:
+  schedule:
+    - cron: "0 6 * * 4" # Thursdays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      version_pattern:
+        description: "Floating stable version for Microsoft.EntityFrameworkCore.* and Npgsql.EntityFrameworkCore.PostgreSQL"
+        default: "10.*"
+        required: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  VERSION_PATTERN: ${{ github.event.inputs.version_pattern || '10.*' }}
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    # Testcontainers needs Docker; ubuntu-latest has it. Postgres image is pulled by the tests themselves.
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Float EF Core / Npgsql versions to ${{ env.VERSION_PATTERN }}
+        run: |
+          sed -i -E \
+            "s#(Include=\"(Microsoft\.EntityFrameworkCore(\.[A-Za-z]+)?|Npgsql\.EntityFrameworkCore\.PostgreSQL)\" Version=\")[^\"]+#\1${VERSION_PATTERN}#g" \
+            Directory.Packages.props
+          grep -E "EntityFrameworkCore|Npgsql" Directory.Packages.props
+
+      - name: Restore
+        id: restore
+        run: dotnet restore
+
+      - name: Resolved versions
+        run: dotnet list src/Hindsight.EntityFrameworkCore.PostgreSQL package | grep -E "EntityFrameworkCore|Npgsql" || true
+
+      - name: Build
+        id: build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test
+        id: test
+        run: dotnet test --no-build --configuration Release --solution Hindsight.slnx
+
+      - name: Open or update issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          STEP="restore"
+          [ "${{ steps.restore.outcome }}" = "success" ] && STEP="build"
+          [ "${{ steps.build.outcome }}" = "success" ] && STEP="test"
+          TITLE="EF Core 10.x compatibility canary failed at ${STEP} (${VERSION_PATTERN})"
+          BODY="Weekly canary against \`${VERSION_PATTERN}\` failed at **${STEP}**.
+
+          This is within the supported 10.x line (see DESIGN.md D11), not a preview - unlike
+          \`efcore-preview\`, this means the pinned floor in Directory.Packages.props is no longer
+          compatible with a newer stable 10.x release users can already resolve to.
+
+          Run: ${RUN_URL}
+
+          Check the resolved versions in the run log, then decide: adapt now, or raise the floor pin
+          and note it in DESIGN.md."
+          EXISTING=$(gh issue list --label efcore-compat --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY" --label efcore-compat
+          fi

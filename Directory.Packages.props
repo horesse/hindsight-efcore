@@ -34,7 +34,7 @@
          graph pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11, which has a known high-severity advisory
          (GHSA-2m69-gcr7-jv3q). Pinned directly (see the matching PackageReference in
          Hindsight.Tests.csproj) to the patched version instead of raising the whole EF Core floor. -->
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
   </ItemGroup>
 
   <!-- Benchmarks -->

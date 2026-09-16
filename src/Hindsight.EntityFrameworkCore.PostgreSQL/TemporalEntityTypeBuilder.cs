@@ -67,4 +67,21 @@ public sealed class TemporalEntityTypeBuilder<TEntity>
         _builder.Property(property).HasAnnotation(HindsightAnnotationNames.IsExcluded, true);
         return this;
     }
+
+    /// <summary>
+    /// Adds an additional, always-populated history column, <c>db_session_user text not null default
+    /// session_user</c>, holding the PostgreSQL role that actually executed the write. Unlike the
+    /// application-supplied change-context columns (<c>changed_by</c> and friends), this value is
+    /// guaranteed by PostgreSQL's own connection authentication and cannot be forged with
+    /// <c>set_config</c> — see DESIGN.md D16 for the threat model this defends against, and what it does
+    /// not. Opt-in: not part of the base history column set (DESIGN.md D5), since a pooled application
+    /// connection's <c>session_user</c> is typically one shared service role rather than a human
+    /// identity, so the column is not universally useful.
+    /// </summary>
+    /// <returns>The same builder instance so that calls can be chained.</returns>
+    public TemporalEntityTypeBuilder<TEntity> WithDbSessionUser()
+    {
+        _builder.HasAnnotation(HindsightAnnotationNames.HasDbSessionUser, true);
+        return this;
+    }
 }

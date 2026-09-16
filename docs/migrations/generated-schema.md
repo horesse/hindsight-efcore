@@ -22,6 +22,7 @@ Named `<main table>_history` in the main table's schema, unless you
 | `operation` | `smallint` | `1` insert, `2` update, `3` delete |
 | `changed_by`, `changed_by_name`, `correlation_id`, `reason` | `text null` | the [change context](/writing/change-context) |
 | `extra` | `jsonb null` | the change context's JSON extras |
+| `db_session_user` | `text not null default session_user` | opt-in only — see [Database session user](/writing/change-context#database-session-user); absent unless the entity calls `WithDbSessionUser()` |
 
 The history table has **no foreign keys** back to the main table, because a deleted row's history must
 outlive it, and **none of the main table's `NOT NULL`, unique or check constraints**, because a unique

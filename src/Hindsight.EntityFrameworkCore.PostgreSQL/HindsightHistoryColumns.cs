@@ -27,4 +27,10 @@ internal static class HindsightHistoryColumns
 
     /// <summary>Application-supplied structured context, stored as <c>jsonb</c>.</summary>
     internal const string Extra = "extra";
+
+    /// <summary>
+    /// PostgreSQL's own <c>session_user</c> for the connection that executed the write — opt-in via
+    /// <see cref="TemporalEntityTypeBuilder{TEntity}.WithDbSessionUser"/> (DESIGN.md D16).
+    /// </summary>
+    internal const string DbSessionUser = "db_session_user";
 }

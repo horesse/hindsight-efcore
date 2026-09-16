@@ -49,6 +49,28 @@ public sealed class HistoryEntityTypeConventionTests
         Assert.True(columns["correlation_id"].IsNullable);
         Assert.True(columns["reason"].IsNullable);
         Assert.Equal("jsonb", columns["extra"].GetColumnType());
+        Assert.DoesNotContain("db_session_user", columns.Keys); // opt-in only (DESIGN.md D16)
+    }
+
+    [Fact]
+    public void WithDbSessionUser_adds_a_not_null_column_defaulting_to_session_user()
+    {
+        var model = BuildModel(b => b.Entity<Policy>().IsTemporal(t => t.WithDbSessionUser()));
+
+        var dbSessionUser = model.HistoryEntityType(typeof(Policy)).GetProperty("db_session_user");
+
+        Assert.False(dbSessionUser.IsNullable);
+        Assert.Equal("session_user", dbSessionUser.GetDefaultValueSql());
+    }
+
+    [Fact]
+    public void Entity_type_annotation_is_set_only_when_WithDbSessionUser_is_called()
+    {
+        var withoutOptIn = BuildModel(b => b.Entity<Policy>().IsTemporal());
+        var withOptIn = BuildModel(b => b.Entity<Policy>().IsTemporal(t => t.WithDbSessionUser()));
+
+        Assert.Null(withoutOptIn.FindEntityType(typeof(Policy))![HindsightAnnotationNames.HasDbSessionUser]);
+        Assert.True(withOptIn.FindEntityType(typeof(Policy))![HindsightAnnotationNames.HasDbSessionUser] is true);
     }
 
     [Fact]
@@ -138,6 +160,7 @@ public sealed class HistoryEntityTypeConventionTests
     [InlineData("correlation_id")]
     [InlineData("reason")]
     [InlineData("extra")]
+    [InlineData("db_session_user")]
     public void Property_column_colliding_with_a_fixed_history_column_throws_with_a_clear_message(string column)
     {
         var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b =>

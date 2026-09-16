@@ -24,6 +24,23 @@ public sealed class CustomizedTemporalContext(DbContextOptions<CustomizedTempora
     }
 }
 
+public sealed class DbSessionUserContext(DbContextOptions<DbSessionUserContext> options) : DbContext(options)
+{
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        #region with-db-session-user
+        modelBuilder.Entity<Policy>(policy =>
+        {
+            policy.ToTable("policies");
+
+            // db_session_user is populated with PostgreSQL's own session_user on every write, in both
+            // writer modes; unlike changed_by it cannot be forged with set_config (DESIGN.md D16).
+            policy.IsTemporal(temporal => temporal.WithDbSessionUser());
+        });
+        #endregion with-db-session-user
+    }
+}
+
 public static class ContextOptions
 {
     public static void Defaults(IServiceCollection services, string connectionString)

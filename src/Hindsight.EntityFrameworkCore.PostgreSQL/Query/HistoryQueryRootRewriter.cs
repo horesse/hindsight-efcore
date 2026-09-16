@@ -168,7 +168,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         // AsOf / AllVersions project the entity itself; History<T> wraps it in Version<TEntity> and
         // adds the period + change-context columns as top-level members.
         var (resultClrType, projectionBody) = kind == HistoryReadKind.History
-            ? WrapInVersion(entityClrType, entityInit, projectionParam, periodStart, periodEnd)
+            ? WrapInVersion(entityClrType, entityInit, projectionParam, periodStart, periodEnd, historyEntityType)
             : (entityClrType, (Expression)entityInit);
 
         var projection = Expression.Lambda(projectionBody, projectionParam);
@@ -189,13 +189,15 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
     //     ValidTo = (DateTimeOffset)EF.Property<DateTime>(h, "valid_to"),
     //     Operation = (VersionOperation)EF.Property<short>(h, "operation"),
     //     ChangedBy = EF.Property<string>(h, "changed_by"), ... Extra = EF.Property<string>(h, "extra"),
+    //     DbSessionUser = EF.Property<string>(h, "db_session_user"), // only when the history entity type has the column
     // }
     private static (Type ResultClrType, Expression Body) WrapInVersion(
         Type entityClrType,
         Expression entityInit,
         ParameterExpression bag,
         string periodStart,
-        string periodEnd)
+        string periodEnd,
+        IEntityType historyEntityType)
     {
         var versionClrType = typeof(Version<>).MakeGenericType(entityClrType);
 
@@ -219,6 +221,11 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             Bind(nameof(Version<object>.CorrelationId), Property(bag, typeof(string), HindsightHistoryColumns.CorrelationId)),
             Bind(nameof(Version<object>.Reason), Property(bag, typeof(string), HindsightHistoryColumns.Reason)),
             Bind(nameof(Version<object>.Extra), Property(bag, typeof(string), HindsightHistoryColumns.Extra)),
+            Bind(
+                nameof(Version<object>.DbSessionUser),
+                historyEntityType.FindProperty(HindsightHistoryColumns.DbSessionUser) is not null
+                    ? Property(bag, typeof(string), HindsightHistoryColumns.DbSessionUser)
+                    : Expression.Constant(null, typeof(string))),
         };
 
         return (versionClrType, Expression.MemberInit(Expression.New(versionClrType), bindings));

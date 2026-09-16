@@ -101,4 +101,15 @@ public sealed class Version<TEntity>
     /// column; <see langword="null"/> when none was supplied.
     /// </summary>
     public string? Extra { get; init; }
+
+    /// <summary>
+    /// PostgreSQL's own <c>session_user</c> for the connection that executed the write, from the
+    /// <c>db_session_user</c> column (DESIGN.md D16); unlike the other change-context members, this
+    /// value is guaranteed by PostgreSQL's connection authentication, not asserted by the application.
+    /// <see langword="null"/> when the entity did not opt in with
+    /// <see cref="TemporalEntityTypeBuilder{TEntity}.WithDbSessionUser"/> — the column does not exist on
+    /// its history table in that case. Always non-null on every stored row when the entity did opt in;
+    /// the database-level <c>NOT NULL</c> constraint guarantees that.
+    /// </summary>
+    public string? DbSessionUser { get; init; }
 }

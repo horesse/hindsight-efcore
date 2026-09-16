@@ -11,6 +11,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+    <!-- MigrateAsyncTests needs a real scaffolded Migration, not just EnsureCreatedAsync's one-shot
+         Generate() call - InsuranceSample carries the checked-in migration for exactly this
+         (CLAUDE.md Layout table: "used for `dotnet ef` migration checks"). -->
+    <ProjectReference Include="../../samples/InsuranceSample/InsuranceSample.csproj" />
   </ItemGroup>
 
 </Project>

@@ -7,6 +7,8 @@
   <ItemGroup>
     <PackageReference Include="Verify.XunitV3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <!-- Forces the patched version over what Sqlite 10.0.4 pulls transitively - see Directory.Packages.props. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
   </ItemGroup>
 
   <ItemGroup>

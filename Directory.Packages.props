@@ -6,12 +6,12 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
 
-  <!-- EF Core / Npgsql -->
+  <!-- EF Core / Npgsql. Floor, not exact pins - see DESIGN.md D11 for why these specific versions. -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
   </ItemGroup>
 
   <!-- Build / packaging -->
@@ -27,8 +27,14 @@
     <PackageVersion Include="Verify.XunitV3" Version="32.0.0" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <!-- Not a supported Hindsight provider (README.md non-goals) - used only by
-         HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. -->
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+         HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. Pinned to
+         the same floor as the EF Core / Npgsql group above so it doesn't force a downgrade conflict. -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />
+    <!-- Transitive via Microsoft.EntityFrameworkCore.Sqlite 10.0.4 - that version's own dependency
+         graph pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11, which has a known high-severity advisory
+         (GHSA-2m69-gcr7-jv3q). Pinned directly (see the matching PackageReference in
+         Hindsight.Tests.csproj) to the patched version instead of raising the whole EF Core floor. -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 
   <!-- Benchmarks -->

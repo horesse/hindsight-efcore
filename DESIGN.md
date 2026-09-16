@@ -341,6 +341,40 @@ questions) is a decision reserved for a deliberate 2.0 release — it needs a ma
 own upgrade-guide migration note, not a patch. A GitHub milestone for 2.0 should carry this question so
 it isn't lost between now and whenever that release is actually cut.
 
+**Supported EF Core / Npgsql range: the 10.x line, not multi-targeted.** `Directory.Packages.props`
+pins a *floor* version (`Microsoft.EntityFrameworkCore.*` 10.0.4, `Npgsql.EntityFrameworkCore.PostgreSQL`
+10.0.1) — a bare version number in a NuGet dependency is a minimum, not an exact pin, so a consuming
+project that references a newer 10.x directly already unifies to that version. Hindsight itself stays
+single-targeted (`net10.0`): EF Core major versions are tied to a matching .NET version, and cross-major
+support (8.x/9.x/11.x) would need multi-targeted TFMs, `#if`-gated code and per-TFM `PublicAPI.*.txt` —
+out of scope, not requested.
+
+**Why 10.0.4 / 10.0.1, not the first 10.0.0 GA.** Checked against nuget.org: `Npgsql.EntityFrameworkCore.PostgreSQL`
+10.0.0 itself only needs `Microsoft.EntityFrameworkCore[.Relational] >= 10.0.0`, but every Npgsql patch
+after it (10.0.1, 10.0.2, 10.0.3) raised that to `>= 10.0.4` — so 10.0.0 is a narrow, quickly-abandoned
+pairing, and 10.0.4 is the actual floor the provider has stood behind since. Pinning higher than a
+provider's own declared floor (as the previous 10.0.12 / 10.0.3 pair did, with no version of Npgsql ever
+requiring more than 10.0.4) silently narrowed what the package claims to support without proving anything
+extra — the full test suite, including the D12/D13 integration tests, passes unchanged at 10.0.4 / 10.0.1.
+One side effect: `Microsoft.EntityFrameworkCore.Sqlite` (test-only, `HindsightOptionsExtensionTests`) had
+to drop to 10.0.4 in lockstep to avoid a `Microsoft.EntityFrameworkCore.Relational` downgrade conflict,
+which in turn pulls `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 — a version with a known high-severity advisory
+(GHSA-2m69-gcr7-jv3q) that 10.0.12's graph didn't have. Pinned that one transitive package straight to
+the patched 2.1.12 via an explicit `PackageReference` in `Hindsight.Tests.csproj`, rather than raising the
+whole EF Core floor back up to dodge it.
+
+What the floor-pin approach cannot prove on its own is that a *newer* stable 10.x release doesn't break
+the query-translation hook (D12) or the migrations decorator (D13); the weekly `efcore-compat.yml` canary
+floats to `10.*` and runs the full test suite against it, non-blocking, opening an issue labelled
+`efcore-compat` on failure — same shape as `efcore-preview.yml`, which does the same for the next *major*
+(currently `11.0.0-*` prerelease). The *floor* side doesn't need a separate canary: it's what `ci.yml`
+already builds and tests on every push, since it's simply what's pinned.
+
+Revisit if: `efcore-compat` fires and the fix is to raise the floor pin (update it here with the new
+floor and why); a user needs Npgsql exactly 10.0.0 (would mean splitting the EF Core floor down to
+10.0.0 too, only for that one pairing); or `SQLitePCLRaw.lib.e_sqlite3` needs bumping again for a future
+advisory.
+
 ## D12. `AsOf` / `AllVersions` translate by query-root replacement — resolved by spike, 2026-09-10
 
 `queryable.AsOf(at)` is a marker method. A public `IQueryExpressionInterceptor.QueryCompilationStarting`

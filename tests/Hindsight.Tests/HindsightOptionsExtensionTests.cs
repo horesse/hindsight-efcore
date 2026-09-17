@@ -4,7 +4,7 @@ namespace Hindsight.Tests;
 
 /// <summary>
 /// Covers <see cref="Infrastructure.HindsightOptionsExtension.Validate"/>: Hindsight is Npgsql-only
-/// (README.md, Non-goals), so a context configured with any other relational provider must fail early
+/// (README.md → Limitations), so a context configured with any other relational provider must fail early
 /// and clearly instead of hitting a confusing DI or SQL-generation error later.
 /// </summary>
 public sealed class HindsightOptionsExtensionTests

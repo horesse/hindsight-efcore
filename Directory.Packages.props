@@ -11,7 +11,7 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.4" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.4" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4" />
-    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
   </ItemGroup>
 
   <!-- Build / packaging -->
@@ -50,7 +50,7 @@
     <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.1" />
     <PackageVersion Include="Verify.XunitV3" Version="33.0.2" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
-    <!-- Not a supported Hindsight provider (README.md non-goals) - used only by
+    <!-- Not a supported Hindsight provider (README.md → Limitations) - used only by
          HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. Pinned to
          the same floor as the EF Core / Npgsql group above so it doesn't force a downgrade conflict. -->
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.4" />

@@ -23,8 +23,8 @@ history table. Read `DESIGN.md` before touching anything non-trivial — it is t
    captured at the start of `SaveChanges` from `TimeProvider`. Trigger mode: `now()`.
 6. **Anything touching SQL gets an integration test on real PostgreSQL (Testcontainers).** InMemory
    and SQLite prove nothing here. Migration DDL gets a Verify snapshot.
-7. **Don't widen scope.** Non-goals in `README.md` and `DESIGN.md` are decided. If a change would
-   cross them, open an issue (or describe one) instead of implementing.
+7. **Don't widen scope.** The limitations in `README.md` → Limitations and `DESIGN.md` are
+   decided. If a change would cross them, open an issue (or describe one) instead of implementing.
 8. **Public surface is deliberate.** Every new public symbol: XML doc, entry in
    `PublicAPI.Unshipped.txt`, justification in the PR description. Prefer `internal`.
 9. **When unsure, ask before building.** A two-line question costs less than a wrong afternoon.
@@ -39,6 +39,7 @@ history table. Read `DESIGN.md` before touching anything non-trivial — it is t
 dotnet build                                   # warnings are errors
 dotnet format --verify-no-changes              # CI fails on drift; run `dotnet format` to fix
 dotnet test --project tests/Hindsight.Tests    # unit, seconds, no Docker
+dotnet test --project tests/Hindsight.Analyzers.Tests     # HDST001 analyzer, seconds, no Docker
 dotnet test --project tests/Hindsight.IntegrationTests   # needs Docker; ~30s container start
 npm --prefix docs ci                           # once: docs toolchain (Node 22+)
 npm --prefix docs run build                    # docs: samples, dead links, anchors — what CI runs
@@ -46,7 +47,7 @@ npm --prefix docs run dev                      # docs preview at http://localhos
 cd samples/InsuranceSample && dotnet ef migrations add <Name>
 ```
 
-Definition of done for any change: `dotnet build` + `dotnet format --verify-no-changes` + both test
+Definition of done for any change: `dotnet build` + `dotnet format --verify-no-changes` + all three test
 projects green, plus `npm --prefix docs run build` when `docs/` changed. Run them yourself before
 reporting done; paste the failing output if they aren't.
 
@@ -54,13 +55,16 @@ reporting done; paste the failing output if they aren't.
 
 ```
 src/Hindsight.EntityFrameworkCore.PostgreSQL/   the package (namespace Hindsight)
+src/Hindsight.Analyzers/                        HDST001; ships inside the package, not a separate one
 tests/Hindsight.Tests/                          unit: model building, conventions, validation
 tests/Hindsight.IntegrationTests/               Testcontainers: SQL, migrations, writers, queries
-samples/InsuranceSample/                        Policy entity; used for `dotnet ef` migration checks
+tests/Hindsight.Analyzers.Tests/                unit: what HDST001 does and does not flag
+samples/                                        InsuranceSample drives the `dotnet ef` checks;
+                                                ProductCatalogSample / TaskTrackerSample are the demos
 benchmarks/Hindsight.Benchmarks/                BenchmarkDotNet; numbers go into README
 docs/                                           VitePress site, versioned; how it works: docs/README.md
 docs/snippets/                                  every C# sample on the site; compiled with the solution
-DESIGN.md                                       decisions D1–D11 + open questions
+DESIGN.md                                       decisions D1–D16 + open questions
 ```
 
 ## Conventions
@@ -106,7 +110,7 @@ What to update, by kind of change:
 | behavior visible to a user (what a migration generates, what a query returns, what throws) | the matching page; a PR title that says it |
 | something users must do by hand when they upgrade | a section for the next version in `docs/reference/upgrading.md` |
 | a design decision | `DESIGN.md` entry in place; the page that explained the old behavior |
-| a limitation added or removed | `docs/reference/limitations.md` and `README.md` → Non-goals |
+| a limitation added or removed | `docs/reference/limitations.md` and `README.md` → Limitations |
 | a new configuration option | its page under `docs/configuration/` or `docs/writing/`, with a sample in `docs/snippets` |
 | a benchmark result | `README.md` and `docs/reference/benchmarks.md` tables |
 | generated SQL (a Verify snapshot) | nothing to copy — pages import the snapshot; reread the prose around it |
@@ -122,7 +126,7 @@ user-visible change, that is a bug in the PR.
 | why property-bag / two writers / no bulk interception | `DESIGN.md` D2–D4 |
 | history column set and indexes | `DESIGN.md` D5 |
 | what a migration does on add/remove/rename | `DESIGN.md` D6, `docs/migrations/schema-evolution.md` |
-| what is out of scope | `README.md` → Non-goals |
+| what is out of scope | `README.md` → Limitations |
 | how to release | `CONTRIBUTING.md` → Releasing |
 | how the docs are versioned and published | `docs/README.md` → Versions |
 

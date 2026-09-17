@@ -5,9 +5,15 @@ updates:
     schedule:
       interval: weekly
     labels: ["dependencies", "skip-changelog"]
+    # EF Core / Npgsql are FLOOR pins, not "latest" (DESIGN.md D11): the package declares the oldest
+    # 10.x it supports, and a routine bump silently narrows that for every consumer. #68 did exactly
+    # that. Newer stable 10.x is proven by the efcore-compat canary, not by this pin, so dependabot
+    # stays out of it - raising the floor is an edit to D11 first. Microsoft.EntityFrameworkCore.Sqlite
+    # (test-only) is in the same range on purpose, to avoid a Relational downgrade conflict.
+    ignore:
+      - dependency-name: "Microsoft.EntityFrameworkCore*"
+      - dependency-name: "Npgsql*"
     groups:
-      efcore:
-        patterns: ["Microsoft.EntityFrameworkCore*", "Npgsql*"]
       tests:
         patterns: ["xunit*", "Microsoft.Testing.*", "Verify*", "Testcontainers*"]
       tooling:

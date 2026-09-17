@@ -27,7 +27,7 @@ internal sealed record HistoryPeriodIndexModel(
 /// <remarks>
 /// The index is a single column, <c>gist (tstzrange(valid_from, valid_to))</c> — no primary-key columns
 /// included. Range types have a native GiST opclass in PostgreSQL core, so this needs no extension
-/// (README's "no database extensions, no superuser" non-goal); a composite GiST index that also covered
+/// (README's "no database extensions, no superuser" promise); a composite GiST index that also covered
 /// the key columns would need <c>btree_gist</c> for the scalar key part, which would violate it. A
 /// single-column range index also works unchanged for a composite primary key (it never references key
 /// columns at all), so there is exactly one index shape regardless of how the temporal entity is keyed.

@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "latest": "1.2",
+  "stable": [
+    "1.2",
+    "1.1"
+  ],
+  "nightly": true,
+  "sources": {
+    "nightly": {
+      "ref": "master",
+      "sha": "fd240bcae1a89cb8a73e403f907238c3d1779188",
+      "publishedAt": "2026-09-17T21:26:13.850Z"
+    },
+    "1.1": {
+      "ref": "v1.1.1",
+      "sha": "5837d50d43dd0c3399d15d21a78d0163aace1294",
+      "publishedAt": "2026-09-13T22:14:43.529Z"
+    },
+    "1.2": {
+      "ref": "v1.2.0",
+      "sha": "4d40d054cbccba18d90a160c8288dd851e14f81a",
+      "publishedAt": "2026-09-17T19:09:57.326Z"
+    }
+  }
+}

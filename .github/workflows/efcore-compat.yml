@@ -31,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     # Testcontainers needs Docker; ubuntu-latest has it. Postgres image is pulled by the tests themselves.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # MinVer needs tags and history
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -39,10 +41,27 @@ jobs:
 
       - name: Float EF Core / Npgsql versions to ${{ env.VERSION_PATTERN }}
         run: |
+          set -euo pipefail
+
+          # Central Package Management rejects a floating PackageVersion with NU1011 unless the project
+          # opts in. The property is injected here, into the checked-out copy only, and is deliberately
+          # NOT committed: the repo pins exact floors (DESIGN.md D11) and CI must keep rejecting a
+          # floating pin written by a human. Only this canary is allowed to float.
+          anchor='<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+          grep -qF "$anchor" Directory.Packages.props \
+            || { echo "::error file=Directory.Packages.props::Anchor '$anchor' not found - the canary cannot enable floating versions. Update this workflow."; exit 1; }
+          sed -i -E "s#(${anchor})#\1\n    <CentralPackageFloatingVersionsEnabled>true</CentralPackageFloatingVersionsEnabled>#" \
+            Directory.Packages.props
+
           sed -i -E \
             "s#(Include=\"(Microsoft\.EntityFrameworkCore(\.[A-Za-z]+)?|Npgsql\.EntityFrameworkCore\.PostgreSQL)\" Version=\")[^\"]+#\1${VERSION_PATTERN}#g" \
             Directory.Packages.props
-          grep -E "EntityFrameworkCore|Npgsql" Directory.Packages.props
+
+          # A silently un-applied rewrite would make this canary a green light that proved nothing.
+          grep -qF "Version=\"${VERSION_PATTERN}\"" Directory.Packages.props \
+            || { echo "::error file=Directory.Packages.props::No PackageVersion was rewritten to ${VERSION_PATTERN} - this canary would have tested the pinned floor instead. Update this workflow."; exit 1; }
+
+          grep -E "CentralPackageFloatingVersionsEnabled|EntityFrameworkCore|Npgsql" Directory.Packages.props
 
       - name: Restore
         id: restore

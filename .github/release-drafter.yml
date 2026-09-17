@@ -1,5 +1,13 @@
 # Release Drafter keeps a draft GitHub Release up to date from merged PRs.
 # The tag/version is still chosen by hand when publishing (MinVer reads the tag).
+#
+# Schema: release-drafter v7 (https://github.com/release-drafter/release-drafter/pull/1558).
+# Labels moved from `categories[*].labels` into `categories[*].when`, `exclude-labels` became a
+# `type: "pre-exclude"` category, and `version-resolver.{major,minor,patch}.labels` became
+# `semver-increment` on the category that already matches those labels.
+#
+# Both the drafter and the autolabeler read this one file, and both read it from the DEFAULT BRANCH -
+# a change here only takes effect once it is merged to master.
 
 name-template: "v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
@@ -7,38 +15,53 @@ prerelease: true
 prerelease-identifier: preview
 
 categories:
-  - title: "⚠️ Breaking changes"
-    labels: ["breaking"]
-  - title: "✨ Features"
-    labels: ["kind:feature"]
-  - title: "🐛 Fixes"
-    labels: ["kind:bug"]
-  - title: "⚡ Performance"
-    labels: ["kind:perf"]
-  - title: "📚 Documentation"
-    labels: ["area:docs"]
-  - title: "🧰 Maintenance"
-    labels: ["kind:chore", "area:ci"]
-    collapse-after: 5
-  - title: "📦 Dependencies"
-    labels: ["dependencies"]
-    collapse-after: 3
+  # Dropped from the notes entirely, before anything is categorised or counted for the version bump.
+  - type: "pre-exclude"
+    when:
+      label: "skip-changelog"
 
-exclude-labels:
-  - "skip-changelog"
+  # `breaking` is what resolves a major bump - the only path to a 2.0 release note.
+  - title: "⚠️ Breaking changes"
+    semver-increment: "major"
+    when:
+      label: "breaking"
+  - title: "✨ Features"
+    semver-increment: "minor"
+    when:
+      label: "kind:feature"
+  - title: "🐛 Fixes"
+    semver-increment: "patch"
+    when:
+      label: "kind:bug"
+  - title: "⚡ Performance"
+    semver-increment: "patch"
+    when:
+      label: "kind:perf"
+  - title: "📚 Documentation"
+    semver-increment: "patch"
+    when:
+      label: "area:docs"
+  - title: "🧰 Maintenance"
+    semver-increment: "patch"
+    collapse-after: 5
+    when:
+      labels: ["kind:chore", "area:ci"]
+  - title: "📦 Dependencies"
+    semver-increment: "patch"
+    collapse-after: 3
+    when:
+      label: "dependencies"
 
 change-template: "- $TITLE (#$NUMBER)"
 change-title-escapes: '\<*_&'
 
+# An unlabelled PR still bumps something rather than nothing.
 version-resolver:
-  major:
-    labels: ["breaking"]
-  minor:
-    labels: ["kind:feature"]
-  patch:
-    labels: ["kind:bug", "kind:perf", "kind:chore", "dependencies", "area:docs"]
   default: patch
 
+# Read by release-drafter/release-drafter/autolabeler@v7, which is a separate action from the drafter.
+# Matchers are `files` (glob), `branch`, `title`, `body` (regex); any one match applies the label.
+# Titles are Conventional Commits and linted by pr-title.yml, so the type/scope is reliable.
 autolabeler:
   - label: "kind:feature"
     title: ['/^feat(\(.+\))?!?:/']

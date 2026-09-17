@@ -15,6 +15,9 @@ on:
   # `edited` matters: the autolabeler matches on the PR title, which is routinely rewritten.
   pull_request_target:
     types: [opened, reopened, synchronize, edited]
+  # Redraw the draft on demand - e.g. after labelling a PR that was merged unlabelled, which the
+  # drafter would otherwise not notice until the next push to master.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,7 +25,7 @@ permissions:
 jobs:
   draft:
     # Only a real branch ref produces a usable draft; see the note above.
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
       contents: write # update the draft release

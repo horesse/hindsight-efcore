@@ -12,6 +12,18 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before.
 
+## Upgrading to 1.1.2
+
+### A column type change on a temporal entity that now fails when the model is built
+
+Changing a property's store type, precision/scale, max length, or value converter while its column
+keeps the same name used to reach the differ as a genuine `AlterColumnOperation` on the history
+table — which could fail outright or silently reshape values that history already holds under the old
+type (`text` → `jsonb` against a history row that isn't valid JSON is a concrete example). It now
+throws `InvalidOperationException` at model build, which includes `dotnet ef migrations add`, naming
+the fix: give the property a different column name instead, so the old column is orphaned exactly like
+a rename. See [Changing a property's type](/migrations/schema-evolution#changing-a-property-s-type).
+
 ## Upgrading to 1.1
 
 ### Add the period-range index to existing history tables

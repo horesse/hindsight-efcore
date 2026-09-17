@@ -81,3 +81,7 @@ static Hindsight.HindsightQueryableExtensions.AllVersions<TEntity>(this System.L
 static Hindsight.HindsightQueryableExtensions.AsOf<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset asOf) -> System.Linq.IQueryable<TEntity!>!
 static Hindsight.HindsightQueryableExtensions.History<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context) -> System.Linq.IQueryable<Hindsight.Version<TEntity!>!>!
 static Hindsight.TemporalEntityTypeBuilderExtensions.IsTemporal<TEntity>(this Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>! builder, System.Action<Hindsight.TemporalEntityTypeBuilder<TEntity!>!>? configure = null) -> Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<TEntity!>!
+const Hindsight.HindsightAnnotationNames.HasDbSessionUser = "Hindsight:HasDbSessionUser" -> string!
+Hindsight.TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser() -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+Hindsight.Version<TEntity>.DbSessionUser.get -> string?
+Hindsight.Version<TEntity>.DbSessionUser.init -> void

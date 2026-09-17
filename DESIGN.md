@@ -132,7 +132,7 @@ The original design argument "a trigger can't know the user" is false — that's
 stays as a reference implementation and for environments where trigger creation is forbidden by policy.
 
 **`HindsightOptionsExtension.Validate`'s provider check.** `UseHindsight()` must reject every provider but
-Npgsql (README non-goal: PostgreSQL only), without naming Npgsql's own `.Internal` options extension type
+Npgsql (README → Limitations: PostgreSQL only), without naming Npgsql's own `.Internal` options extension type
 (golden rule 1). It instead finds the registered `IsDatabaseProvider` extension and reads the assembly its
 concrete type was declared in — public `System.Reflection` metadata, nothing more than asking "which
 package produced this object" — and compares that against `"Npgsql.EntityFrameworkCore.PostgreSQL"`. That
@@ -496,8 +496,18 @@ One side effect: `Microsoft.EntityFrameworkCore.Sqlite` (test-only, `HindsightOp
 to drop to 10.0.4 in lockstep to avoid a `Microsoft.EntityFrameworkCore.Relational` downgrade conflict,
 which in turn pulls `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 — a version with a known high-severity advisory
 (GHSA-2m69-gcr7-jv3q) that 10.0.12's graph didn't have. Pinned that one transitive package straight to
-the patched 2.1.12 via an explicit `PackageReference` in `Hindsight.Tests.csproj`, rather than raising the
-whole EF Core floor back up to dodge it.
+the patched version via an explicit `PackageReference` in `Hindsight.Tests.csproj` (2.1.12 then, 3.53.3
+since #68), rather than raising the whole EF Core floor back up to dodge it — a test-only pin, so keeping
+it at the newest patched release costs nothing.
+
+**The floor moves deliberately, never by a dependency bump.** Dependabot's `efcore` group proposed Npgsql
+10.0.1 → 10.0.3 as a routine patch bump and it was merged in #68 (2026-09-16), raising the floor without
+touching this entry — exactly the silent narrowing this decision rejects, since no 10.0.x release of Npgsql
+needs more than EF Core 10.0.4 and nothing in the suite needs 10.0.3. Restored to 10.0.1 (full suite green
+at 10.0.4 / 10.0.1, verified 2026-09-17), and `Microsoft.EntityFrameworkCore*` / `Npgsql*` now sit in
+dependabot's `ignore` list in `.github/dependabot.yml`: a floor is not "latest", so it moves only by an
+edit to this entry that says why. Proving the package still works against newer stable 10.x is the
+`efcore-compat` canary's job, not the pin's.
 
 What the floor-pin approach cannot prove on its own is that a *newer* stable 10.x release doesn't break
 the query-translation hook (D12) or the migrations decorator (D13); the weekly `efcore-compat.yml` canary

@@ -129,8 +129,8 @@ internal sealed class HindsightOptionsExtension : IDbContextOptionsExtension
         throw new InvalidOperationException(
             $"Hindsight only supports the Npgsql/PostgreSQL provider ('{NpgsqlProviderAssemblyName}'), but "
             + $"this DbContext is configured with '{providerAssemblyName}'. Providers other than "
-            + "Npgsql/PostgreSQL are a non-goal (README.md, Non-goals); configure the context with "
-            + "UseNpgsql(...) instead of UseSqlite(...)/UseSqlServer(...)/etc.");
+            + "Npgsql/PostgreSQL are out of scope by design (see Limitations in README.md); "
+            + "configure the context with UseNpgsql(...) instead of UseSqlite(...)/UseSqlServer(...)/etc.");
     }
 
     private sealed class ExtensionInfo(HindsightOptionsExtension extension)

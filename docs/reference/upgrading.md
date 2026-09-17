@@ -12,9 +12,7 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before.
 
-## Upgrading to (next release)
-
-<!-- TODO(release): confirm the actual version number for this heading when cutting the release. -->
+## Upgrading to 1.3
 
 ### Making an existing table temporal now seeds its history automatically
 

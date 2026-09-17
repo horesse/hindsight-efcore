@@ -81,9 +81,14 @@ jobs:
 
       # Daily EF Core builds live on the dnceng feed; Npgsql previews are on nuget.org. Central Package
       # Management turns "more than one source and no source mapping" into NU1507, which this repo's
-      # TreatWarningsAsErrors promotes to an error - so the mapping is not optional here. The EF Core
-      # ids are listed under both sources on purpose: an official preview on nuget.org and a daily
-      # build on dnceng are both legitimate answers, and NuGet picks the highest match.
+      # TreatWarningsAsErrors promotes to an error - so the mapping is not optional here.
+      #
+      # `Microsoft.*` / `System.*` are mapped to BOTH sources on purpose. Only the longest matching
+      # pattern counts, so a narrower list (say `Microsoft.EntityFrameworkCore*`) silently cuts the
+      # dnceng feed out for every sibling a preview drags in - which is how a run died on
+      # "Unable to find package Microsoft.Data.Sqlite.Core ... Versions from dotnet11 were not
+      # considered". Listing them under both leaves an official preview on nuget.org and a daily build
+      # on dnceng equally reachable, and NuGet takes the best match.
       - name: Add dotnet-eng feed
         run: |
           cat > nuget.config <<'EOF'
@@ -97,13 +102,11 @@ jobs:
             <packageSourceMapping>
               <packageSource key="nuget.org">
                 <package pattern="*" />
-                <package pattern="Microsoft.EntityFrameworkCore*" />
-                <package pattern="Microsoft.Extensions.*" />
+                <package pattern="Microsoft.*" />
                 <package pattern="System.*" />
               </packageSource>
               <packageSource key="dotnet11">
-                <package pattern="Microsoft.EntityFrameworkCore*" />
-                <package pattern="Microsoft.Extensions.*" />
+                <package pattern="Microsoft.*" />
                 <package pattern="System.*" />
               </packageSource>
             </packageSourceMapping>

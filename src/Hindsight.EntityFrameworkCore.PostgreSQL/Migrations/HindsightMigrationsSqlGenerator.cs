@@ -17,7 +17,11 @@ namespace Hindsight.Migrations;
 /// added to, dropped from or renamed on the temporal entity, and drops the function — <c>CASCADE</c>,
 /// taking the trigger on the main table with it — when the history table is dropped, or when its entity
 /// type stops being temporal without the table itself being dropped
-/// (<see cref="HindsightAnnotationNames.OrphanedTriggerPending"/>).
+/// (<see cref="HindsightAnnotationNames.OrphanedTriggerPending"/>). It also appends, right after the same
+/// <c>CreateTableOperation</c> (after the trigger, when one is also emitted), an
+/// <c>INSERT INTO ... SELECT ...</c> that seeds an initial history version for every row already in the
+/// main table — unconditionally, in both writer modes (DESIGN.md D6, "Existing non-empty table made
+/// temporal"; <see cref="HistorySeedSqlGenerator"/>).
 /// </summary>
 /// <remarks>
 /// It is a decorator, not a subclass of <c>NpgsqlMigrationsSqlGenerator</c>: that type's only public
@@ -30,7 +34,9 @@ namespace Hindsight.Migrations;
 /// created exactly once, alongside the table: a history table's period columns and their types never
 /// change after creation, so — unlike the trigger function — there is nothing to ever re-emit for it, and
 /// a de-temporalized entity's history table (D6) keeps its index for free, because D6 never drops or
-/// recreates that table in the first place.
+/// recreates that table in the first place. The seeding statement is the same: emitted exactly once, next
+/// to the table's own creation, and never replayed by a later migration — a table already made temporal
+/// keeps growing its history from that point through the ordinary writer path, not through seeding again.
 /// </remarks>
 internal sealed class HindsightMigrationsSqlGenerator(
     IMigrationsSqlGenerator inner,
@@ -45,16 +51,17 @@ internal sealed class HindsightMigrationsSqlGenerator(
         ArgumentNullException.ThrowIfNull(operations);
 
         var indexes = model is null ? [] : CollectPeriodIndexModels(model);
+        var seeds = model is null ? [] : CollectSeedModels(model);
         var triggers = model is null || historyWriter != HistoryWriter.Trigger ? [] : CollectTriggerModels(model);
         var orphanedDrops = model is null || historyWriter != HistoryWriter.Trigger
             ? []
             : CollectOrphanedTriggerDrops(model);
-        if (indexes.Count == 0 && triggers.Count == 0 && orphanedDrops.Count == 0)
+        if (indexes.Count == 0 && seeds.Count == 0 && triggers.Count == 0 && orphanedDrops.Count == 0)
         {
             return inner.Generate(operations, model, options);
         }
 
-        return inner.Generate(Rewrite(operations, indexes, triggers, orphanedDrops), model, options);
+        return inner.Generate(Rewrite(operations, indexes, seeds, triggers, orphanedDrops), model, options);
     }
 
     // Every live history table (DESIGN.md D5): the period-range index has nothing to do with which
@@ -88,6 +95,50 @@ internal sealed class HindsightMigrationsSqlGenerator(
         }
 
         return indexes;
+    }
+
+    // Every live history table (DESIGN.md D6): seeding, like the period-range index above, has nothing
+    // to do with which writer is configured — it is a plain INSERT...SELECT against the main table, not
+    // something either writer executes — so this is never gated on historyWriter either. Unconditional by
+    // design: a brand-new entity's main table is created empty in the same migration (the SELECT returns
+    // zero rows, a harmless no-op), and an existing entity that just had IsTemporal() added is exactly the
+    // case this seeds for. There is no attempt to tell the two apart.
+    private static List<HistorySeedModel> CollectSeedModels(IModel model)
+    {
+        var seeds = new List<HistorySeedModel>();
+
+        foreach (var history in model.GetEntityTypes())
+        {
+            if (history[HindsightAnnotationNames.IsHistoryTable] is not true || history.GetTableName() is not { } historyTable)
+            {
+                continue;
+            }
+
+            var source = model.GetEntityTypes().FirstOrDefault(
+                entityType => (string?)entityType[HindsightAnnotationNames.HistoryEntityType] == history.Name);
+            if (source is null || source.GetTableName() is not { } mainTable)
+            {
+                // Orphaned (DESIGN.md D6): its CreateTableOperation — and with it any seeding — already
+                // happened back when the entity type was still live; nothing to do this build.
+                continue;
+            }
+
+            var periodStart = (string?)source[HindsightAnnotationNames.PeriodStartColumnName]
+                ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName;
+            var periodEnd = (string?)source[HindsightAnnotationNames.PeriodEndColumnName]
+                ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName;
+
+            seeds.Add(new HistorySeedModel(
+                historyTable,
+                history.GetSchema(),
+                mainTable,
+                source.GetSchema(),
+                CollectEntityColumns(history, periodStart, periodEnd),
+                periodStart,
+                periodEnd));
+        }
+
+        return seeds;
     }
 
     // A history entity type whose source stopped being temporal this build (DESIGN.md D6): no live
@@ -134,13 +185,12 @@ internal sealed class HindsightMigrationsSqlGenerator(
         return triggers;
     }
 
-    private static HistoryTriggerModel BuildModel(IEntityType history, IEntityType source)
+    // Shared by BuildModel (Trigger mode's versioned column set) and CollectSeedModels (both modes): the
+    // columns a history table mirrors from its source, minus the fixed Hindsight columns (surrogate key,
+    // operation, change context, the opt-in db_session_user), the period columns, and any column orphaned
+    // by DESIGN.md D6 (no matching column on the main table to read NEW/OLD or SELECT from).
+    private static List<string> CollectEntityColumns(IEntityType history, string periodStart, string periodEnd)
     {
-        var periodStart = (string?)source[HindsightAnnotationNames.PeriodStartColumnName]
-            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName;
-        var periodEnd = (string?)source[HindsightAnnotationNames.PeriodEndColumnName]
-            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName;
-
         var fixedColumns = new HashSet<string>(StringComparer.Ordinal)
         {
             HindsightHistoryColumns.HistoryId,
@@ -169,6 +219,18 @@ internal sealed class HindsightMigrationsSqlGenerator(
             }
         }
 
+        return entityColumns;
+    }
+
+    private static HistoryTriggerModel BuildModel(IEntityType history, IEntityType source)
+    {
+        var periodStart = (string?)source[HindsightAnnotationNames.PeriodStartColumnName]
+            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName;
+        var periodEnd = (string?)source[HindsightAnnotationNames.PeriodEndColumnName]
+            ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName;
+
+        var entityColumns = CollectEntityColumns(history, periodStart, periodEnd);
+
         var keyColumns = new List<string>();
         foreach (var keyProperty in source.FindPrimaryKey()!.Properties)
         {
@@ -192,14 +254,17 @@ internal sealed class HindsightMigrationsSqlGenerator(
     private List<MigrationOperation> Rewrite(
         IReadOnlyList<MigrationOperation> operations,
         List<HistoryPeriodIndexModel> indexes,
+        List<HistorySeedModel> seeds,
         List<HistoryTriggerModel> triggers,
         List<(string HistoryTable, string? HistorySchema)> orphanedDrops)
     {
         var byHistoryTableIndex = indexes.ToDictionary(index => (index.HistorySchema, index.HistoryTable));
+        var byHistoryTableSeed = seeds.ToDictionary(seed => (seed.HistorySchema, seed.HistoryTable));
         var byHistoryTable = triggers.ToDictionary(trigger => (trigger.HistorySchema, trigger.HistoryTable));
         var byMainTable = triggers.ToDictionary(trigger => (trigger.MainSchema, trigger.MainTable));
 
-        var result = new List<MigrationOperation>(operations.Count + (indexes.Count + (triggers.Count * 2)));
+        var result = new List<MigrationOperation>(
+            operations.Count + (indexes.Count + seeds.Count + (triggers.Count * 2)));
         var createdOrDropped = new HashSet<(string?, string)>();
         var needsRefresh = new List<HistoryTriggerModel>();
         var renamedHistoryTables = new List<(string? OldSchema, string OldName, HistoryPeriodIndexModel Model)>();
@@ -233,7 +298,8 @@ internal sealed class HindsightMigrationsSqlGenerator(
             {
                 case CreateTableOperation create
                     when byHistoryTableIndex.ContainsKey((create.Schema, create.Name))
-                        || byHistoryTable.ContainsKey((create.Schema, create.Name)):
+                        || byHistoryTable.ContainsKey((create.Schema, create.Name))
+                        || byHistoryTableSeed.ContainsKey((create.Schema, create.Name)):
                     if (byHistoryTableIndex.TryGetValue((create.Schema, create.Name), out var index))
                     {
                         result.Add(new SqlOperation
@@ -251,6 +317,17 @@ internal sealed class HindsightMigrationsSqlGenerator(
                         result.Add(new SqlOperation
                         {
                             Sql = HistoryTriggerSqlGenerator.CreateTrigger(created, sqlGenerationHelper),
+                        });
+                    }
+
+                    // Seeding goes last: after the index (needed by the writer paths, not by this
+                    // statement itself) and, in Trigger mode, after the trigger — matching the order the
+                    // manual workaround this automates always documented (create the table, then seed it).
+                    if (byHistoryTableSeed.TryGetValue((create.Schema, create.Name), out var seed))
+                    {
+                        result.Add(new SqlOperation
+                        {
+                            Sql = HistorySeedSqlGenerator.SeedInitialVersions(seed, sqlGenerationHelper),
                         });
                     }
 

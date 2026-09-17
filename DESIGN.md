@@ -316,7 +316,54 @@ a delete is meant to be read (D12).
   `.Internal` type. Covered by `MigrateAsyncTests` (Testcontainers: `Database.MigrateAsync()` against a
   brand-new database with a real scaffolded migration, both writer modes, plus a second `MigrateAsync()`
   against the now-current database to confirm the fast path itself still works).
-- Existing non-empty table made temporal → v1.1 (`INSERT ... SELECT` seeding the initial version).
+- **Existing non-empty table made temporal → seeded automatically, implemented 2026-09-17.** A brand-new
+  history table starts empty even when its main table already has rows: until a row changes for the
+  first time it has no version, so `AsOf` returns nothing for it and its history only starts at that
+  first change — silently missing every row that existed before `IsTemporal()` was added, exactly the
+  golden-rule-2 outcome this package exists to prevent. `HindsightMigrationsSqlGenerator` now emits one
+  more piece of DDL next to the ones it already attaches to a history table's `CreateTableOperation`
+  (the period-range index, D5/D14, and — Trigger mode only — the function and trigger, D13): an
+  `INSERT INTO <history_table> (...) SELECT ..., now(), 'infinity', 1 FROM <main_table>` that seeds one
+  version per existing row (`HistorySeedSqlGenerator.SeedInitialVersions`, model collected by
+  `HindsightMigrationsSqlGenerator.CollectSeedModels`). The column list is the same versioned-column set
+  the Trigger function's `insertColumns` uses (`CollectEntityColumns`, factored out of `BuildModel` so
+  both share it) — every mirrored column minus the fixed Hindsight columns, the period columns, and any
+  orphaned column — so a composite primary key needs no special handling: its columns are ordinary entity
+  columns and fall out of the same list. `valid_from = now()` ("known since this migration": `AsOf`
+  before that instant still correctly returns nothing), `valid_to = 'infinity'`, `operation = 1` (insert),
+  same shape the manual workaround `docs/migrations/existing-tables.md` used to document by hand. The
+  change-context columns (`changed_by`, `changed_by_name`, `correlation_id`, `reason`, `extra`, and the
+  opt-in `db_session_user`) are left out of both the column list and the `SELECT` — there is no change
+  context to attribute a migration-time seed to — so they come back `NULL`, and `db_session_user`, for an
+  entity that opted in, gets its own `DEFAULT session_user` exactly as it would for any other `INSERT`
+  that does not name it (D16).
+
+  **Unconditional, deliberately, in both writer modes.** The statement is collected the same way the
+  period-range index already is (`CollectPeriodIndexModels`'s sibling, `CollectSeedModels`, walking every
+  live history table with a source, unconditionally on `historyWriter`) and is plain migration DDL,
+  executed once by whatever runs the migration — neither writer's own code path touches it. It is emitted
+  for *every* newly created history table, with no attempt to distinguish "the entity is brand new" (its
+  main table is created empty in the very same migration, so the `SELECT` naturally returns zero rows — a
+  harmless no-op, already exercised by every other test in this file that creates a temporal entity from
+  scratch) from "an existing entity just had `IsTemporal()` added" (the main table already has rows — the
+  case this exists for). Reliably telling the two apart at migration-generation time — the model the
+  generator sees has no notion of how many rows a table physically holds — would be speculative
+  complexity for no behavioral gain: the unconditional statement is correct and cheap either way. Emitted
+  exactly once, next to the table's own creation, and never replayed by a later migration: a table already
+  made temporal keeps growing its history through the ordinary writer path from that point on, not
+  through seeding again — the same "runs only at `CreateTableOperation`" placement already governs the
+  period-range index (D14) and the trigger's initial `CreateFunction`/`CreateTrigger` (D13).
+
+  Covered by `HistorySeedingTests` (Testcontainers, both writer modes): an existing table with rows, built
+  from a genuine previous snapshot exactly as `dotnet ef migrations add` would produce one (unlike every
+  other schema-evolution test in this project, which starts an entity temporal from its very first
+  migration), gets one seeded version per row with `valid_to = 'infinity'`, `operation = 1`, `valid_from`
+  bounded by the migration's execution window, every change-context column `NULL`, and remains fully
+  writable afterward; a brand-new temporal entity seeds zero rows and raises no error.
+
+  `docs/migrations/existing-tables.md` no longer presents the manual `INSERT ... SELECT` as something a
+  caller must write — it documents the automatic behavior and keeps the hand-written form only for
+  customizing `valid_from` or excluding a column differently than `Exclude(...)` already does.
 
 ## D7. Historical queries are always no-tracking
 

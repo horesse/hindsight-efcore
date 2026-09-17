@@ -12,6 +12,29 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before.
 
+## Upgrading to (next release)
+
+<!-- TODO(release): confirm the actual version number for this heading when cutting the release. -->
+
+### Making an existing table temporal now seeds its history automatically
+
+A migration that adds `IsTemporal()` to an entity whose table already has rows used to create an empty
+history table — Hindsight did not seed it, and the entity had no version until its first change after the
+migration. The generated migration now also seeds one initial version per existing row, right after the
+history table (and its trigger, under the Trigger writer) is created: an
+`INSERT INTO ... SELECT ..., now(), 'infinity', 1 FROM ...` for every versioned column, dated "known
+since the migration" — the same shape
+[Making an existing table temporal](/migrations/existing-tables#making-an-existing-table-temporal) used
+to tell you to write by hand. This is unconditional: it also runs for a brand-new temporal entity, where
+the main table is created empty in the same migration and the seed is a no-op.
+
+**If you were already hand-writing this seeding SQL** in your own migrations, per the old docs: remove
+it from your next such migration, or your existing rows get seeded twice (once by your own
+`migrationBuilder.Sql(…)`, once by the generator). A migration you already applied is unaffected — this
+only changes what a *new* `dotnet ef migrations add` generates from here on. Newly added tables (temporal
+from their very first migration) were never affected either way, since their main table is empty at
+creation time.
+
 ## Upgrading to 1.2
 
 ### A column type change on a temporal entity that now fails when the model is built

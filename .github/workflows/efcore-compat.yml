@@ -85,6 +85,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           STEP="restore"
+          # Restore never ran, so something in the canary's own setup (SDK, version rewrite) died.
+          [ "${{ steps.restore.outcome }}" = "skipped" ] && STEP="setup"
           [ "${{ steps.restore.outcome }}" = "success" ] && STEP="build"
           [ "${{ steps.build.outcome }}" = "success" ] && STEP="test"
           TITLE="EF Core 10.x compatibility canary failed at ${STEP} (${VERSION_PATTERN})"

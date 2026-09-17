@@ -47,19 +47,30 @@ jobs:
         with:
           fetch-depth: 0 # MinVer needs tags and history
 
-      # global.json pins the 10.0.100 band and forbids prereleases, so it has to be relaxed before
-      # setup-dotnet or the preview SDK would never be selected. Checked-out copy only.
+      # Deliberately not global-json-file: the committed global.json pins the 10.0.100 band and forbids
+      # prereleases, which is the whole point of it on master.
+      - uses: actions/setup-dotnet@v6
+        id: sdk
+        with:
+          dotnet-version: ${{ env.SDK_VERSION }}
+          dotnet-quality: preview
+
       - name: Retarget the checkout to ${{ env.TARGET_FRAMEWORK }}
+        env:
+          RESOLVED_SDK: ${{ steps.sdk.outputs.dotnet-version }}
         run: |
           set -euo pipefail
 
-          sdk_band="$(echo "$TARGET_FRAMEWORK" | sed -E 's#^net([0-9]+)\.([0-9]+)$#\1.\2.100#')"
-          [ "$sdk_band" != "$TARGET_FRAMEWORK" ] \
-            || { echo "::error::target_framework '${TARGET_FRAMEWORK}' is not a netX.Y moniker."; exit 1; }
-          jq --arg v "$sdk_band" '.sdk = {version: $v, rollForward: "latestFeature", allowPrerelease: true}' \
+          # The exact version setup-dotnet installed, not the band: a prerelease sorts *below* its own
+          # release, so asking for "11.0.100" can never roll forward onto "11.0.100-rc.1.x" and the
+          # build dies with "A compatible .NET SDK was not found" even though the SDK is right there.
+          [ -n "$RESOLVED_SDK" ] \
+            || { echo "::error::setup-dotnet reported no installed version for ${SDK_VERSION}."; exit 1; }
+          jq --arg v "$RESOLVED_SDK" '.sdk = {version: $v, rollForward: "latestFeature", allowPrerelease: true}' \
             global.json > global.json.tmp
           mv global.json.tmp global.json
           cat global.json
+          dotnet --version
 
           # One <TargetFramework> in the root Directory.Build.props drives every project except the
           # Roslyn analyzer, which pins netstandard2.0 in its own csproj and must stay there.
@@ -67,11 +78,6 @@ jobs:
             || { echo "::error file=Directory.Build.props::No <TargetFramework>net10.0</TargetFramework> to retarget - update this workflow."; exit 1; }
           sed -i "s#<TargetFramework>net10.0</TargetFramework>#<TargetFramework>${TARGET_FRAMEWORK}</TargetFramework>#" \
             Directory.Build.props
-
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: ${{ env.SDK_VERSION }}
-          dotnet-quality: preview
 
       # Daily EF Core builds live on the dnceng feed; Npgsql previews are on nuget.org. Central Package
       # Management turns "more than one source and no source mapping" into NU1507, which this repo's
@@ -151,6 +157,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           STEP="restore"
+          # Restore never ran, so something in the canary's own setup (SDK, retarget, feed, rewrite) died.
+          [ "${{ steps.restore.outcome }}" = "skipped" ] && STEP="setup"
           [ "${{ steps.restore.outcome }}" = "success" ] && STEP="build"
           [ "${{ steps.build.outcome }}" = "success" ] && STEP="test"
           TITLE="EF Core preview canary failed at ${STEP} (${VERSION_PATTERN})"

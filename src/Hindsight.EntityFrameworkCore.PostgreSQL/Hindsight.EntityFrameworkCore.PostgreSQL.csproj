@@ -19,4 +19,32 @@
     <InternalsVisibleTo Include="Hindsight.IntegrationTests" />
   </ItemGroup>
 
+  <!-- HDST001 (DESIGN.md D4): the analyzer ships bundled in this package, not as a separate NuGet
+       package. ReferenceOutputAssembly="false" + OutputItemType="Analyzer" is the standard MSBuild
+       incantation for "build this project and load its output as a C# analyzer for the current
+       project" - it also makes `dotnet build` here run HDST001 against Hindsight's own source
+       (currently a no-op: the library defines IsTemporal(), it doesn't call it against a concrete
+       entity type, so the analyzer never has a temporal type to match against). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Hindsight.Analyzers\Hindsight.Analyzers.csproj"
+                       ReferenceOutputAssembly="false"
+                       OutputItemType="Analyzer" />
+  </ItemGroup>
+
+  <!-- Packs the analyzer's own build output into analyzers/dotnet/cs - the folder NuGet/MSBuild loads
+       C# analyzers from for every project that references this package (the same convention
+       Microsoft.CodeAnalysis.PublicApiAnalyzers itself, referenced above, ships under). Visible="false"
+       keeps it out of the package's file listing in tools that show package contents as if they were
+       ordinary content; DevelopmentDependency is not set here because this package is a real runtime
+       dependency, not an analyzer-only one - only the analyzer *file* is build-time-only, not the
+       package as a whole. -->
+  <Target Name="_HindsightAddAnalyzerToPackage" BeforeTargets="_GetPackageFiles">
+    <MSBuild Projects="..\Hindsight.Analyzers\Hindsight.Analyzers.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_HindsightAnalyzerAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_HindsightAnalyzerAssembly)" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    </ItemGroup>
+  </Target>
+
 </Project>

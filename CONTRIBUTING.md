@@ -65,4 +65,7 @@ creates its own database on it. Not run in CI — it is manual, and the numbers 
    the version you just shipped — CI's `Pack` step then diffs every subsequent PR's public surface
    against the real published package. CI fails the build if a tagged release ships with
    `PublicAPI.Shipped.txt` unchanged (see `.github/workflows/ci.yml`), which is the backstop for
-   forgetting this step.
+   forgetting this step. Do the same for `src/Hindsight.Analyzers/AnalyzerReleases.Unshipped.md`: move
+   its new-rule rows under a `## Release X.Y.Z` header in `AnalyzerReleases.Shipped.md` — the analyzer
+   equivalent, enforced by `Microsoft.CodeAnalysis.Analyzers`' own RS2008 the same way PublicApiAnalyzers
+   enforces the one above, just with no CI backstop yet.

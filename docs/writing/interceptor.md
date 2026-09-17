@@ -14,6 +14,30 @@ migrations cannot create functions and triggers; otherwise prefer the
 processes never reach a `SaveChangesInterceptor`. They write **no history** under this writer.
 :::
 
+## HDST001: analyzer diagnostic {#hdst001-bulk-operations-on-a-temporal-entity}
+
+An analyzer bundled with the package flags an `ExecuteUpdate` / `ExecuteUpdateAsync` / `ExecuteDelete` /
+`ExecuteDeleteAsync` call against an entity your project configures with `IsTemporal()`:
+
+<<< @/snippets/AnalyzerDiagnostics.cs#hdst001-fires
+
+It reports at **Info** severity, not `Warning`: from source alone the analyzer can prove the entity is
+temporal, but it cannot see which `HistoryWriter` your application actually uses — that's a runtime
+`UseHindsight(...)` call, possibly in a different project entirely (an ASP.NET host's `Program.cs`
+configuring a `DbContext` whose entities and repositories live in a separate class library, for
+example). So it fires on every such call regardless of writer mode, and the diagnostic message says so.
+Read it as "go check", not as "history is definitely being lost".
+
+**If you're using [`HistoryWriter.Trigger`](/writing/trigger)**, the call is fine as-is — the database
+trigger records it whichever way the row changed — and HDST001 is a known false positive. Suppress it
+at the call site once you've verified that:
+
+<<< @/snippets/AnalyzerDiagnostics.cs#hdst001-suppressed
+
+See [DESIGN.md D4](https://github.com/horesse/hindsight-efcore/blob/master/DESIGN.md#d4-bulk-operations-are-not-intercepted)
+for the full reasoning behind reporting this way instead of trying (and failing) to detect the writer
+mode itself.
+
 ## How a `SaveChanges` is recorded
 
 1. **Before the save**, the interceptor snapshots every temporal entity that is `Added`, `Modified` or

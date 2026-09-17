@@ -147,7 +147,47 @@ assembly (the `efcore-preview` canary covers this).
 `ExecuteUpdate`/`ExecuteDelete` are caught by the Trigger writer for free (verified 2026-09-11 —
 `TriggerHistoryWriterTests`): the trigger fires on the resulting rows and writes history, with `NULL`
 change-context columns since those paths do not go through `SaveChanges`. In Interceptor mode they
-bypass history; this is documented, not worked around. An analyzer diagnostic may come in v1.1.
+bypass history; this is documented, not worked around.
+
+**Analyzer diagnostic — shipped 2026-09-17.** `HDST001` (`src/Hindsight.Analyzers`, bundled into the
+main package's `analyzers/dotnet/cs`, not a separate NuGet package) flags an `ExecuteUpdate` /
+`ExecuteUpdateAsync` / `ExecuteDelete` / `ExecuteDeleteAsync` call against an entity type the same
+compilation configures with `IsTemporal()`.
+
+**The precision question this needed resolving first: can the analyzer also tell which `HistoryWriter`
+applies, so it only fires when that actually matters?** Three designs were on the table:
+
+- (a) Prove both facts — `IsTemporal()` *and* the effective `HistoryWriter` — by walking the same
+  `DbContext`-derived class's method bodies (`OnModelCreating` for the former, `OnConfiguring` for the
+  latter). Rejected: `UseHindsight(...)` is at least as often called from `AddDbContext<T>(...)` in a
+  completely different project — an ASP.NET host's `Program.cs` configuring a `DbContext` whose
+  entities and repositories live in a separate class library — as from `OnConfiguring` on the context
+  itself. A Roslyn analyzer sees one compilation at a time, so in that (common, not edge-case) shape the
+  configuration call is invisible to it no matter how the same-class check is written. Solving that
+  would need cross-project analysis, which is out of scope (golden rule 7).
+- (b) Fire whenever `T` is provably `IsTemporal()`-configured **anywhere in the same compilation**,
+  independent of writer mode, at `Info` severity, with the message explicitly saying "if you're using
+  `HistoryWriter.Trigger`, this is fine". **Chosen.**
+- A compilation-wide heuristic — suppress if `UseHistoryWriter(HistoryWriter.Trigger)` appears anywhere
+  in the same compilation — was considered and rejected before implementation: it only helps the
+  single-project shape (like this repo's own samples), and silently stops working the moment the
+  configuration call moves to another project, which is exactly the layered shape (a) already ruled
+  out. A heuristic that degrades exactly where it matters most is a false sense of precision, which is
+  worse than an honest "go check" (rule 2, applied to diagnostic quality rather than query results).
+
+(b) means the analyzer cannot avoid firing for a codebase that only ever uses
+`HistoryWriter.Trigger` — under Trigger mode the flagged call is completely safe. `Info` severity (not
+`Warning`) is the direct consequence: this is a "you probably want to check this" nudge that must never
+be read as a claim that history is actually being lost, in either direction (a firing is not a
+guarantee of loss; silence is not a guarantee of safety, since a `DbContext` configured in another
+project is equally invisible to the "is `T` temporal at all" half of the check). `docs/writing/
+interceptor.md` documents what triggers it and how to suppress a call site verified to use
+`HistoryWriter.Trigger`. Covered by `Hindsight.Analyzers.Tests`
+(`Microsoft.CodeAnalysis.CSharp.Analyzer.Testing`, `DefaultVerifier` — the xunit-specific testing
+packages are deprecated upstream): fires on `DbSet<T>` and `context.Set<T>()`, on a composed query, and
+even when `HistoryWriter.Trigger` is configured (documenting the trade-off above as a passing test, not
+just prose); does not fire on a non-temporal entity or on an unrelated method that merely shares one of
+the four names on some other type.
 
 ## D5. History columns
 

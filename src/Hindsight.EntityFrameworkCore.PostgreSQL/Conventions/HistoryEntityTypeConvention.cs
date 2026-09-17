@@ -122,7 +122,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         {
             throw new NotSupportedException(
                 $"Entity '{entityType.DisplayName()}' takes part in an inheritance hierarchy, which Hindsight "
-                + "does not support in v1 (DESIGN.md D9). Make the entity standalone, or remove IsTemporal().");
+                + "does not support (DESIGN.md D9). Make the entity standalone, or remove IsTemporal().");
         }
 
         if (entityType.FindPrimaryKey() is null)

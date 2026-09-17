@@ -4,6 +4,10 @@ name: EF Core preview canary
 # (and EF Core daily builds from the dotnet-eng feed). Hindsight rides close to EF Core's public
 # extension points; this is how we learn about a break before users do.
 #
+# An EF Core major is tied to a matching .NET major: the 11.0.0-* packages target net11.0 only, so this
+# canary also moves the SDK and the repo's TargetFramework to 11 for the duration of the run. Those
+# rewrites live in the checked-out copy only - master stays net10.0 / single-targeted (DESIGN.md D11).
+#
 # Failure opens (or updates) one issue labelled `efcore-preview`. It never blocks PRs.
 
 on:
@@ -15,6 +19,14 @@ on:
         description: "Floating version for Microsoft.EntityFrameworkCore.* and Npgsql.EntityFrameworkCore.PostgreSQL"
         default: "11.0.0-*"
         required: true
+      target_framework:
+        description: "TargetFramework to build the next major against (must match the EF Core major)"
+        default: "net11.0"
+        required: true
+      sdk_version:
+        description: ".NET SDK feature band to install for that TargetFramework"
+        default: "11.0.x"
+        required: true
 
 permissions:
   contents: read
@@ -24,18 +36,59 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   VERSION_PATTERN: ${{ github.event.inputs.version_pattern || '11.0.0-*' }}
+  TARGET_FRAMEWORK: ${{ github.event.inputs.target_framework || 'net11.0' }}
+  SDK_VERSION: ${{ github.event.inputs.sdk_version || '11.0.x' }}
 
 jobs:
   canary:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@v7
         with:
-          global-json-file: global.json
+          fetch-depth: 0 # MinVer needs tags and history
 
-      # Daily EF Core builds live on the dnceng feed; Npgsql previews are on nuget.org.
+      # Deliberately not global-json-file: the committed global.json pins the 10.0.100 band and forbids
+      # prereleases, which is the whole point of it on master.
+      - uses: actions/setup-dotnet@v6
+        id: sdk
+        with:
+          dotnet-version: ${{ env.SDK_VERSION }}
+          dotnet-quality: preview
+
+      - name: Retarget the checkout to ${{ env.TARGET_FRAMEWORK }}
+        env:
+          RESOLVED_SDK: ${{ steps.sdk.outputs.dotnet-version }}
+        run: |
+          set -euo pipefail
+
+          # The exact version setup-dotnet installed, not the band: a prerelease sorts *below* its own
+          # release, so asking for "11.0.100" can never roll forward onto "11.0.100-rc.1.x" and the
+          # build dies with "A compatible .NET SDK was not found" even though the SDK is right there.
+          [ -n "$RESOLVED_SDK" ] \
+            || { echo "::error::setup-dotnet reported no installed version for ${SDK_VERSION}."; exit 1; }
+          jq --arg v "$RESOLVED_SDK" '.sdk = {version: $v, rollForward: "latestFeature", allowPrerelease: true}' \
+            global.json > global.json.tmp
+          mv global.json.tmp global.json
+          cat global.json
+          dotnet --version
+
+          # One <TargetFramework> in the root Directory.Build.props drives every project except the
+          # Roslyn analyzer, which pins netstandard2.0 in its own csproj and must stay there.
+          grep -qF "<TargetFramework>net10.0</TargetFramework>" Directory.Build.props \
+            || { echo "::error file=Directory.Build.props::No <TargetFramework>net10.0</TargetFramework> to retarget - update this workflow."; exit 1; }
+          sed -i "s#<TargetFramework>net10.0</TargetFramework>#<TargetFramework>${TARGET_FRAMEWORK}</TargetFramework>#" \
+            Directory.Build.props
+
+      # Daily EF Core builds live on the dnceng feed; Npgsql previews are on nuget.org. Central Package
+      # Management turns "more than one source and no source mapping" into NU1507, which this repo's
+      # TreatWarningsAsErrors promotes to an error - so the mapping is not optional here.
+      #
+      # `Microsoft.*` / `System.*` are mapped to BOTH sources on purpose. Only the longest matching
+      # pattern counts, so a narrower list (say `Microsoft.EntityFrameworkCore*`) silently cuts the
+      # dnceng feed out for every sibling a preview drags in - which is how a run died on
+      # "Unable to find package Microsoft.Data.Sqlite.Core ... Versions from dotnet11 were not
+      # considered". Listing them under both leaves an official preview on nuget.org and a daily build
+      # on dnceng equally reachable, and NuGet takes the best match.
       - name: Add dotnet-eng feed
         run: |
           cat > nuget.config <<'EOF'
@@ -46,15 +99,44 @@ jobs:
               <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
               <add key="dotnet11" value="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet11/nuget/v3/index.json" />
             </packageSources>
+            <packageSourceMapping>
+              <packageSource key="nuget.org">
+                <package pattern="*" />
+                <package pattern="Microsoft.*" />
+                <package pattern="System.*" />
+              </packageSource>
+              <packageSource key="dotnet11">
+                <package pattern="Microsoft.*" />
+                <package pattern="System.*" />
+              </packageSource>
+            </packageSourceMapping>
           </configuration>
           EOF
+          cat nuget.config
 
       - name: Float EF Core / Npgsql versions to ${{ env.VERSION_PATTERN }}
         run: |
+          set -euo pipefail
+
+          # Central Package Management rejects a floating PackageVersion with NU1011 unless the project
+          # opts in. The property is injected here, into the checked-out copy only, and is deliberately
+          # NOT committed: the repo pins exact floors (DESIGN.md D11) and CI must keep rejecting a
+          # floating pin written by a human. Only the canaries are allowed to float.
+          anchor='<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>'
+          grep -qF "$anchor" Directory.Packages.props \
+            || { echo "::error file=Directory.Packages.props::Anchor '$anchor' not found - the canary cannot enable floating versions. Update this workflow."; exit 1; }
+          sed -i -E "s#(${anchor})#\1\n    <CentralPackageFloatingVersionsEnabled>true</CentralPackageFloatingVersionsEnabled>#" \
+            Directory.Packages.props
+
           sed -i -E \
             "s#(Include=\"(Microsoft\.EntityFrameworkCore(\.[A-Za-z]+)?|Npgsql\.EntityFrameworkCore\.PostgreSQL)\" Version=\")[^\"]+#\1${VERSION_PATTERN}#g" \
             Directory.Packages.props
-          grep -E "EntityFrameworkCore|Npgsql" Directory.Packages.props
+
+          # A silently un-applied rewrite would make this canary a green light that proved nothing.
+          grep -qF "Version=\"${VERSION_PATTERN}\"" Directory.Packages.props \
+            || { echo "::error file=Directory.Packages.props::No PackageVersion was rewritten to ${VERSION_PATTERN} - this canary would have tested the pinned floor instead. Update this workflow."; exit 1; }
+
+          grep -E "CentralPackageFloatingVersionsEnabled|EntityFrameworkCore|Npgsql" Directory.Packages.props
 
       - name: Restore
         id: restore
@@ -78,14 +160,23 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           STEP="restore"
+          # Restore never ran, so something in the canary's own setup (SDK, retarget, feed, rewrite) died.
+          [ "${{ steps.restore.outcome }}" = "skipped" ] && STEP="setup"
           [ "${{ steps.restore.outcome }}" = "success" ] && STEP="build"
           [ "${{ steps.build.outcome }}" = "success" ] && STEP="test"
           TITLE="EF Core preview canary failed at ${STEP} (${VERSION_PATTERN})"
-          BODY="Weekly canary against \`${VERSION_PATTERN}\` failed at **${STEP}**.
+          BODY="Weekly canary against \`${VERSION_PATTERN}\` on \`${TARGET_FRAMEWORK}\` failed at **${STEP}**.
+
+          The run builds the repo against the next EF Core major, which also means the next .NET major:
+          the SDK and the root \`TargetFramework\` are rewritten to \`${TARGET_FRAMEWORK}\` for the run only
+          (master stays single-targeted - DESIGN.md D11).
 
           Run: ${RUN_URL}
 
-          Check the resolved versions in the run log, then decide: adapt now, or pin and note in DESIGN.md."
+          Check the resolved versions in the run log, then decide: adapt now, or pin and note in DESIGN.md.
+          A failure at **restore** is usually the canary's own harness (no matching preview published yet,
+          feed/source-mapping, SDK band) rather than a Hindsight incompatibility - read the log before
+          concluding EF Core broke us."
           EXISTING=$(gh issue list --label efcore-preview --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"

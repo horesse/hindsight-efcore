@@ -516,6 +516,28 @@ floats to `10.*` and runs the full test suite against it, non-blocking, opening 
 (currently `11.0.0-*` prerelease). The *floor* side doesn't need a separate canary: it's what `ci.yml`
 already builds and tests on every push, since it's simply what's pinned.
 
+**How the canaries float, and why the opt-in isn't committed.** Central Package Management rejects a
+floating `PackageVersion` with NU1011 unless `CentralPackageFloatingVersionsEnabled` is set. Each canary
+injects that property into its *checked-out* `Directory.Packages.props`, in the same step that rewrites
+the versions — it is deliberately absent from the committed file, so a floating pin written by a human
+still fails `ci.yml` restore, which is the behavior this section's exact floors want. Each rewrite step
+also asserts afterwards that it actually changed something: a canary that silently tested the pinned
+floor would be a green light proving nothing, which is how both canaries spent their first months
+(`#60`, `#73` — every run since they were added died at restore on NU1011, so neither had ever produced
+a compatibility signal).
+
+**The preview canary also moves the TFM and the SDK, because an EF Core major is a .NET major.**
+`Microsoft.EntityFrameworkCore.* 11.0.0-*` and `Npgsql.EntityFrameworkCore.PostgreSQL 11.0.0-*` ship
+`net11.0`-only assets, so floating the versions on a `net10.0` build can only ever fail at restore with
+NU1202 — testing the next major means building against the next major's framework. `efcore-preview.yml`
+therefore also rewrites the root `Directory.Build.props` `<TargetFramework>` and relaxes `global.json`
+to a prerelease SDK of the matching band, both in the checkout only. This is not multi-targeting and does
+not change the position above: `master`, the package and its `PublicAPI.*.txt` stay single-targeted
+`net10.0`. The canary is a throwaway "would the next major work at all" probe whose only output is an
+issue; the `target_framework` / `sdk_version` dispatch inputs move it to 12 when the time comes. That
+canary also needs NuGet package source mapping, since it adds the dnceng feed and CPM turns a second
+unmapped source into NU1507 — an error here, under `TreatWarningsAsErrors`.
+
 Revisit if: `efcore-compat` fires and the fix is to raise the floor pin (update it here with the new
 floor and why); a user needs Npgsql exactly 10.0.0 (would mean splitting the EF Core floor down to
 10.0.0 too, only for that one pairing); or `SQLitePCLRaw.lib.e_sqlite3` needs bumping again for a future

@@ -1,21 +1,45 @@
 name: Release Drafter
 
+# Two jobs, because release-drafter v7 split the autolabeler out of the main action:
+# `release-drafter@v7` only drafts, `release-drafter/autolabeler@v7` only labels. A workflow that
+# calls the main action on a pull_request does nothing at all - v7 also force-dry-runs on
+# `refs/pull/N/merge`, since that is an ephemeral merge commit ("forcing dry-run mode and disabling
+# publish"). That combination is why no PR merged after the v7 bump (#66) carries a label.
+
 on:
   push:
     branches: [master]
-  pull_request:
+  # pull_request_target (not pull_request): it runs in the base-branch context, so the token can
+  # write labels on a PR from a fork too. Safe here because nothing in this workflow checks out or
+  # executes the PR's code - the autolabeler only reads PR metadata and adds labels.
+  # `edited` matters: the autolabeler matches on the PR title, which is routinely rewritten.
+  pull_request_target:
     types: [opened, reopened, synchronize, edited]
+  # Redraw the draft on demand - e.g. after labelling a PR that was merged unlabelled, which the
+  # drafter would otherwise not notice until the next push to master.
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   draft:
+    # Only a real branch ref produces a usable draft; see the note above.
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # update the draft release
-      pull-requests: write # autolabeler
+      contents: write # update the draft release
     steps:
       - uses: release-drafter/release-drafter@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  label:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # autolabeler
+    steps:
+      - uses: release-drafter/release-drafter/autolabeler@v7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

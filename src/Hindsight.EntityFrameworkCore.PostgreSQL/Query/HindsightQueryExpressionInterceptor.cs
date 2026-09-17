@@ -28,7 +28,7 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         if (scan.HasInclude)
         {
             throw new NotSupportedException(
-                "AsOf() / AllVersions() / History<T>() cannot be combined with Include() / ThenInclude() in v1 (DESIGN.md D8): "
+                "AsOf() / AllVersions() / History<T>() cannot be combined with Include() / ThenInclude() (DESIGN.md D8): "
                 + "reading related entities from history is an interval join, and a silently wrong result would be "
                 + "worse than the missing feature. Load the related rows with a separate history query, or use FromSql.");
         }

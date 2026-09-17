@@ -117,7 +117,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         {
             throw new NotSupportedException(
                 $"{operatorName} is not supported for '{sourceEntityType.DisplayName()}': it takes part in an inheritance "
-                + "hierarchy, which Hindsight does not support in v1 (DESIGN.md D9). Read the history table with FromSql.");
+                + "hierarchy, which Hindsight does not support (DESIGN.md D9). Read the history table with FromSql.");
         }
 
         if (sourceEntityType.FindAnnotation(HindsightAnnotationNames.HistoryEntityType)?.Value is not string historyName)
@@ -317,7 +317,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             {
                 throw new NotSupportedException(
                     $"{operatorName} cannot reconstruct '{sourceEntityType.DisplayName()}': property '{property.Name}' has "
-                    + $"no setter. v1 requires settable properties on entities read through {operatorName}.");
+                    + $"no setter. Entities read through {operatorName} require settable properties.");
             }
 
             if (property.GetColumnName() is { } column)

@@ -35,7 +35,7 @@ public static class HindsightQueryableExtensions
     /// Everything after it — <c>Where</c>, <c>OrderBy</c>, <c>Select</c>, <c>First</c>, <c>Any</c>,
     /// <c>Count</c> — composes as usual and translates to a single SQL query against the history table.
     /// Results are always no-tracking (DESIGN.md D7). Combining <c>AsOf</c> with <see cref="EntityFrameworkQueryableExtensions.Include{TEntity, TProperty}"/>
-    /// throws <see cref="NotSupportedException"/> in v1 (DESIGN.md D8).
+    /// throws <see cref="NotSupportedException"/> (DESIGN.md D8).
     /// </para>
     /// </remarks>
     /// <typeparam name="TEntity">The temporal entity type. It must be configured with
@@ -89,7 +89,7 @@ public static class HindsightQueryableExtensions
     /// your own <c>OrderBy</c> / <c>OrderByDescending</c> replaces that ordering. Results are always
     /// no-tracking (DESIGN.md D7). Combining <c>AllVersions</c> with
     /// <see cref="EntityFrameworkQueryableExtensions.Include{TEntity, TProperty}"/> throws
-    /// <see cref="NotSupportedException"/> in v1 (DESIGN.md D8).
+    /// <see cref="NotSupportedException"/> (DESIGN.md D8).
     /// </para>
     /// </remarks>
     /// <typeparam name="TEntity">The temporal entity type. It must be configured with

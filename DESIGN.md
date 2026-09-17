@@ -7,7 +7,8 @@ refutes something, edit the entry — don't append a correction below it.
 
 - **System time** — when the row physically existed in the database. This is what Hindsight tracks.
 - **Application (valid) time** — when the fact was true in the real world ("this tariff applies from March 1").
-  PostgreSQL 19 supports it natively (`FOR PORTION OF`, `WITHOUT OVERLAPS`). Not in scope for v1.
+  PostgreSQL 19 supports it natively (`FOR PORTION OF`, `WITHOUT OVERLAPS`). Not in scope; the API
+  leaves room to add it without breaking changes.
 
 ## D1. Two tables, not one table with a "current" flag
 
@@ -434,11 +435,11 @@ methods anywhere in the tree, the same way it already detects `Include`/`AsTrack
 `AllVersions_with_ExecuteDelete_throws_...` / `History_with_ExecuteUpdate_throws_...` (and their
 "writes nothing" companions) in the integration test suite.
 
-## D8. `AsOf` + `Include` throws in v1
+## D8. `AsOf` + `Include` throws
 
 It's an interval join on overlapping periods. A silently wrong answer is worse than no feature.
 
-## D9. TPH hierarchies, owned references and complex properties are rejected in v1
+## D9. TPH hierarchies, owned references and complex properties are rejected
 
 One clear exception at model validation. Support is an issue, not a stretch goal.
 

@@ -135,7 +135,7 @@ hold data in it. See [Evolving a temporal entity](https://horesse.github.io/hind
 
 - **Bitemporal (system + application time) is not implemented.** The API leaves room to add
   application time later without breaking changes.
-- **`AsOf()` combined with `Include()` throws.** It is an interval join; v1 refuses rather than
+- **`AsOf()` combined with `Include()` throws.** It is an interval join; Hindsight refuses rather than
   returning a silently wrong result.
 - **Restoring an entity to a previous version is not automatic** — history is read-only, you copy the
   values back yourself.

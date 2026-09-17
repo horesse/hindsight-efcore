@@ -14,10 +14,12 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+    <Project Path="src/Hindsight.Analyzers/Hindsight.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Hindsight.Tests/Hindsight.Tests.csproj" />
     <Project Path="tests/Hindsight.IntegrationTests/Hindsight.IntegrationTests.csproj" />
+    <Project Path="tests/Hindsight.Analyzers.Tests/Hindsight.Analyzers.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/InsuranceSample/InsuranceSample.csproj" />

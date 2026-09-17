@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Roslyn analyzers target netstandard2.0 only: this is what every host that loads a C# analyzer
+         (Visual Studio, VS Code/OmniSharp, `dotnet build`) can load regardless of which .NET the
+         consuming project itself targets (RS1041 - an analyzer built for a specific runtime TFM "will
+         cause the compiler to behave unpredictably"). It must also not reference
+         Microsoft.CodeAnalysis.Workspaces (RS1038) - that assembly isn't loaded during command-line/CI
+         compilation, only inside an IDE. -->
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Hindsight.Analyzers</RootNamespace>
+    <AssemblyName>Hindsight.Analyzers</AssemblyName>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+
+    <!-- Not a NuGet package of its own (DESIGN.md D4): its output is embedded into
+         Hindsight.EntityFrameworkCore.PostgreSQL's analyzers/dotnet/cs folder by that project's own
+         packaging target, instead of src/Directory.Build.props's usual "everything under src/ ships as
+         its own package" default. -->
+    <IsPackable>false</IsPackable>
+    <EnablePackageValidation>false</EnablePackageValidation>
+  </PropertyGroup>
+
+  <!-- VersionOverride, not a central PackageVersion - see the comment in Directory.Packages.props next
+       to Microsoft.CodeAnalysis.CSharp.Analyzer.Testing for why. 5.9.0 is current stable and matches
+       the .NET 10 SDK's own Roslyn version; PrivateAssets="all" keeps both out of this project's own
+       (unused, IsPackable=false) dependency list. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" VersionOverride="5.9.0" PrivateAssets="all" />
+    <!-- Meta-analyzer for analyzer authoring: RS1xxx correctness rules, and RS2008
+         (AnalyzerReleaseTracking) enforcing AnalyzerReleases.Shipped.md / Unshipped.md below. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" VersionOverride="5.9.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Not a public API surface in the PublicAPI.txt sense (DESIGN.md D4): nothing here is a C# type a
+       consumer references at compile time, so src/Directory.Build.props's PublicApiAnalyzers reference
+       doesn't apply. -->
+  <ItemGroup>
+    <PackageReference Remove="Microsoft.CodeAnalysis.PublicApiAnalyzers" />
+  </ItemGroup>
+
+  <!-- Microsoft.CodeAnalysis.Analyzers auto-includes AnalyzerReleases.Shipped.md /
+       AnalyzerReleases.Unshipped.md next to the project as AdditionalFiles on its own (the same way
+       PublicApiAnalyzers auto-includes PublicAPI.*.txt for the main project) - no explicit item needed. -->
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hindsight.Analyzers.Tests" />
+  </ItemGroup>
+
+</Project>

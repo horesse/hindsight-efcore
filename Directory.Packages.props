@@ -20,6 +20,30 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
   </ItemGroup>
 
+  <!-- HDST001 analyzer (src/Hindsight.Analyzers), bundled into the main package's analyzers/dotnet/cs -
+       not a separate NuGet package (DESIGN.md D4).
+
+       None of the Microsoft.CodeAnalysis.* packages the analyzer or its tests need are centrally pinned
+       here, deliberately: Microsoft.EntityFrameworkCore.Design (a dependency of the samples, for
+       `dotnet ef`) pulls Microsoft.CodeAnalysis.CSharp.Workspaces/.CSharp/.Common at an exact (`=`)
+       5.0.0 across its whole transitive graph, and with CentralPackageTransitivePinningEnabled a
+       *central* PackageVersion for any of those ids - at any version other than that exact 5.0.0 -
+       forces the samples' unrelated graph to the central version too and breaks it (NU1608/NU1107).
+       src/Hindsight.Analyzers/Hindsight.Analyzers.csproj and
+       tests/Hindsight.Analyzers.Tests/Hindsight.Analyzers.Tests.csproj pin their own Roslyn package
+       versions locally with PackageReference's VersionOverride instead - a per-project override that
+       central package transitive pinning does not propagate to the rest of the solution. -->
+
+  <!-- Analyzer tests (tests/Hindsight.Analyzers.Tests). The xunit-specific testing packages
+       (Microsoft.CodeAnalysis.CSharp.Analyzer.Testing.XUnit and friends) are deprecated upstream in
+       favor of the generic package + Microsoft.CodeAnalysis.Testing.DefaultVerifier, which throws plain
+       exceptions xunit.v3 reports as failures like any other - no framework-specific adapter needed.
+       This one package ID is safe to pin centrally: EF Core Design has no dependency on the *testing*
+       framework, only on the compiler packages called out above. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" Version="1.1.4" />
+  </ItemGroup>
+
   <!-- Tests -->
   <ItemGroup>
     <PackageVersion Include="xunit.v3" Version="4.0.1" />

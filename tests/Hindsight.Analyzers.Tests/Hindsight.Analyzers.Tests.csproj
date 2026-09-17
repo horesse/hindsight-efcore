@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hindsight.Analyzers.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Generic package, not the xunit-flavored one: Microsoft.CodeAnalysis.CSharp.Analyzer.Testing.XUnit
+         is deprecated upstream ("legacy and is no longer maintained"). DefaultVerifier (from the
+         transitive Microsoft.CodeAnalysis.Testing core package) just throws plain exceptions on a
+         failed assertion, which xunit.v3 reports as a test failure like any other - no
+         framework-specific adapter needed. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Analyzer.Testing" />
+    <!-- VersionOverride, not a central PackageVersion: see the comment in Directory.Packages.props next
+         to Microsoft.CodeAnalysis.CSharp.Analyzer.Testing for why this one package is pinned locally. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" VersionOverride="5.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hindsight.Analyzers/Hindsight.Analyzers.csproj" />
+    <!-- Test sources compile real Hindsight API calls (IsTemporal, DbContext, DbSet<T>) so the analyzer
+         is exercised against the same syntax/semantics a consumer's project actually produces. -->
+    <ProjectReference Include="../../src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>

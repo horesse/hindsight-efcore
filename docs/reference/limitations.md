@@ -27,7 +27,10 @@ Each of these fails loudly, so you find out during development rather than from 
 ### Interceptor writer
 
 - **It only sees `SaveChanges`.** `ExecuteUpdate`, `ExecuteDelete`, raw SQL and other processes write
-  no history. The trigger writer records them. See [Interceptor writer](/writing/interceptor).
+  no history. The trigger writer records them. See [Interceptor writer](/writing/interceptor). An
+  analyzer (`HDST001`) catches the common case at compile time — a bulk operation against an entity your
+  project configures with `IsTemporal()` — but it cannot see which writer you actually use, so it fires
+  at `Info` severity regardless: see [the analyzer diagnostic](/writing/interceptor#hdst001-bulk-operations-on-a-temporal-entity).
 - **Your own `SaveChangesInterceptor` runs after Hindsight's.** A change it makes inside
   `SavingChanges` reaches the table without a version.
   [Details](/writing/interceptor#your-own-interceptors-run-after-hindsights).

@@ -12,7 +12,7 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before.
 
-## Upgrading to 1.1.2
+## Upgrading to 1.2
 
 ### A column type change on a temporal entity that now fails when the model is built
 

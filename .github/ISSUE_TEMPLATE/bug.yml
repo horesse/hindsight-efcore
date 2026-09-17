@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please check [Limitations and non-goals](https://horesse.github.io/hindsight-efcore/articles/limitations.html) first — several things are deliberately unsupported in v1.
+        Please check [Limitations and non-goals](https://horesse.github.io/hindsight-efcore/latest/reference/limitations) first — several things are deliberately unsupported.
   - type: input
     id: versions
     attributes:

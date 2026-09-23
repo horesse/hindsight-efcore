@@ -48,7 +48,7 @@
   <ItemGroup>
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.4.1" />
-    <PackageVersion Include="Verify.XunitV3" Version="33.0.2" />
+    <PackageVersion Include="Verify.XunitV3" Version="33.1.1" />
     <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
     <!-- Not a supported Hindsight provider (README.md → Limitations) - used only by
          HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. Pinned to

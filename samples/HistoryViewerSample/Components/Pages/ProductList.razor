@@ -1,0 +1,52 @@
+@page "/"
+@inject HistoryQueries Queries
+
+<PageTitle>Products · Hindsight history viewer</PageTitle>
+
+<h2>Products</h2>
+<p class="muted">Every product that ever existed, deleted ones included. Pick one to see its history.</p>
+
+<table>
+    <thead>
+        <tr><th>SKU</th><th>Name</th><th class="num">Price</th><th>Status</th><th class="num">Versions</th><th>Last change</th></tr>
+    </thead>
+    <tbody>
+        @foreach (var product in _products)
+        {
+            var latest = product.Latest;
+            <tr>
+                <td><a href="@($"products/{latest.Entity.Id}")">@latest.Entity.Sku</a></td>
+                <td>@latest.Entity.Name</td>
+                <td class="num">@Display.Money(latest.Entity.Price)</td>
+                <td>
+                    @if (product.IsDeleted)
+                    {
+                        <span class="status-deleted">deleted</span>
+                    }
+                    else
+                    {
+                        <span>current</span>
+                    }
+                </td>
+                <td class="num">@product.VersionCount</td>
+                <td>
+                    <span class="time">@Display.Time(latest.ValidFrom)</span>
+                    @if (Display.HasNoContext(latest))
+                    {
+                        <span class="muted"> · no change context</span>
+                    }
+                    else
+                    {
+                        <span> · @Display.Who(latest)</span>
+                    }
+                </td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private IReadOnlyList<ProductSummary> _products = [];
+
+    protected override async Task OnInitializedAsync() => _products = await Queries.ListProductsAsync();
+}

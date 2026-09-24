@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>HistoryViewerSample</RootNamespace>
+    <!-- Samples are not held to library-grade analysis. -->
+    <AnalysisLevel>latest-minimum</AnalysisLevel>
+    <NoWarn>$(NoWarn);CS1591;CA1303;CA1305;CA2007</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Same domain as ProductCatalogSample, linked rather than copied so there is one Product model.
+         Not a ProjectReference: that sample is a console Exe with its own Program, migrations and
+         design-time factory, none of which belong here. This sample creates its schema with
+         EnsureCreatedAsync and has no migrations of its own. -->
+    <Compile Include="../ProductCatalogSample/Product.cs" Link="Domain/Product.cs" />
+    <Compile Include="../ProductCatalogSample/CatalogDbContext.cs" Link="Domain/CatalogDbContext.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Not a runtime dependency of Hindsight itself - this sample spins up its own disposable
+         PostgreSQL container so `dotnet run` works with no setup. -->
+    <PackageReference Include="Testcontainers.PostgreSql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hindsight.EntityFrameworkCore.PostgreSQL/Hindsight.EntityFrameworkCore.PostgreSQL.csproj" />
+  </ItemGroup>
+
+</Project>

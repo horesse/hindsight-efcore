@@ -18,6 +18,7 @@ on:
     paths:
       - "docs/**"
       - "DESIGN.md"
+      - "samples/HistoryViewerSample/**"
       - "samples/InsuranceSample/**"
       - "samples/ProductCatalogSample/**"
       - "samples/TaskTrackerSample/**"

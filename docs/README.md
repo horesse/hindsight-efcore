@@ -25,7 +25,7 @@ docs/
   introduction/ tutorials/ configuration/ writing/ querying/ migrations/ reference/
                               one folder per sidebar section, one .md file per page
   snippets/                   every C# sample on the site (a project in Hindsight.slnx)
-  public/                     static files served as-is (icon.png)
+  public/                     static files served as-is (icon.png, images/ for screenshots)
   .vitepress/config.mts       site config; the list of sidebar sections
   .vitepress/sidebar.ts       builds each section's pages from its folder
   .vitepress/theme/           version switcher and "not the latest version" banner

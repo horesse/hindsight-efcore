@@ -1,0 +1,144 @@
+@page "/products/{Id:int}"
+@inject HistoryQueries Queries
+
+<PageTitle>@(_latest?.Entity.Sku ?? "Not found") · Hindsight history viewer</PageTitle>
+
+<p><a href="/">← All products</a></p>
+
+@if (_latest is null)
+{
+    <p>No product with id @Id has ever existed.</p>
+    return;
+}
+
+<h2>@_latest.Entity.Name <span class="muted">@_latest.Entity.Sku</span></h2>
+@if (_latest.Operation == VersionOperation.Delete)
+{
+    <p class="status-deleted">
+        Deleted at <span class="time">@Display.Time(_latest.ValidFrom)</span>
+        @if (!Display.HasNoContext(_latest))
+        {
+            <span> by @Display.Who(_latest) — @_latest.Reason</span>
+        }
+    </p>
+}
+
+<h3>Timeline</h3>
+<p class="muted">
+    <code>History&lt;Product&gt;()</code>, newest first. Changes are <code>Diff</code> against the version before.
+    The highlighted row is the version in effect at the instant below.
+</p>
+<table>
+    <thead>
+        <tr><th>Valid from (UTC)</th><th>Valid to</th><th>Operation</th><th>Who</th><th>Reason</th><th>Changes</th><th></th></tr>
+    </thead>
+    <tbody>
+        @foreach (var entry in _timeline)
+        {
+            var v = entry.Version;
+            <tr class="@(IsInEffect(v) ? "active" : null)">
+                <td class="time">@Display.Time(v.ValidFrom)</td>
+                <td class="time muted">@(v.IsCurrent ? "∞ (current)" : v.Operation == VersionOperation.Delete ? "—" : Display.Time(v.ValidTo))</td>
+                <td><span class="op op-@v.Operation">@v.Operation</span></td>
+                @if (Display.HasNoContext(v))
+                {
+                    <td colspan="2" class="muted">no change context: written outside SaveChanges (bulk update or raw SQL)</td>
+                }
+                else
+                {
+                    <td>@Display.Who(v)</td>
+                    <td>@v.Reason</td>
+                }
+                <td>
+                    @if (v.Operation == VersionOperation.Delete)
+                    {
+                        <span class="muted">deleted; last state as in the row below</span>
+                    }
+                    else
+                    {
+                        <ul class="changes">
+                            @foreach (var change in entry.Changes)
+                            {
+                                <li>
+                                    @change.Property.Name:
+                                    @if (v.Operation == VersionOperation.Insert)
+                                    {
+                                        <ins>@Display.Value(change.NewValue)</ins>
+                                    }
+                                    else
+                                    {
+                                        <del>@Display.Value(change.OldValue)</del> <span>→</span> <ins>@Display.Value(change.NewValue)</ins>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                </td>
+                <td class="nowrap"><a href="@AsOfLink(v.ValidFrom)">view as of</a></td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+<h3>State as of an instant</h3>
+<form method="get">
+    <label for="at">Instant (UTC, ISO 8601):</label>
+    <input type="text" id="at" name="at" value="@Display.Instant(_at)" />
+    <button type="submit">Show</button>
+    <a href="@($"products/{Id}")">now</a>
+</form>
+@if (_atIsInvalid)
+{
+    <p class="status-deleted">Could not read "@At" as an instant; showing the state now instead.</p>
+}
+
+<p class="muted"><code>db.Products.AsOf(@Display.Instant(_at))</code></p>
+@if (_asOf is null)
+{
+    <p>This product did not exist at that instant: it was not created yet, or already deleted.</p>
+}
+else
+{
+    <table style="width: auto">
+        <tbody>
+            <tr><th>Sku</th><td>@_asOf.Sku</td></tr>
+            <tr><th>Name</th><td>@_asOf.Name</td></tr>
+            <tr><th>Price</th><td class="num">@Display.Money(_asOf.Price)</td></tr>
+            <tr><th>Stock</th><td class="num">@_asOf.StockQuantity</td></tr>
+        </tbody>
+    </table>
+}
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    [SupplyParameterFromQuery]
+    public string? At { get; set; }
+
+    private IReadOnlyList<TimelineEntry> _timeline = [];
+    private Version<Product>? _latest;
+    private DateTimeOffset _at;
+    private bool _atIsInvalid;
+    private Product? _asOf;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _timeline = await Queries.TimelineAsync(Id);
+        _latest = _timeline.FirstOrDefault()?.Version;
+        if (_latest is null)
+        {
+            return;
+        }
+
+        _atIsInvalid = !string.IsNullOrWhiteSpace(At) && !Display.TryParseInstant(At, out _);
+        _at = Display.TryParseInstant(At, out var at) ? at : DateTimeOffset.UtcNow;
+        _asOf = await Queries.AsOfAsync(Id, _at);
+    }
+
+    // The same half-open test AsOf runs in SQL: valid_from <= at < valid_to. A tombstone's interval is
+    // empty, so it is never in effect.
+    private bool IsInEffect(Version<Product> v) => v.ValidFrom <= _at && _at < v.ValidTo;
+
+    private string AsOfLink(DateTimeOffset at) => $"products/{Id}?at={Uri.EscapeDataString(Display.Instant(at))}";
+}

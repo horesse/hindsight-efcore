@@ -3,12 +3,14 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
+using NpgsqlTypes;
 
 namespace Hindsight.Query;
 
 /// <summary>
-/// Rewrites every <c>AsOf(...)</c> / <c>AllVersions()</c> / <c>History&lt;T&gt;()</c> marker call in a
-/// query tree into a real query over the entity's property-bag history entity type. All three end in
+/// Rewrites every <c>AsOf(...)</c> / <c>AllVersions()</c> / <c>FromTo(...)</c> / <c>ContainedIn(...)</c> /
+/// <c>History&lt;T&gt;()</c> marker call in a query tree into a real query over the entity's property-bag
+/// history entity type. All of them end in
 /// <c>historySource.Select(h =&gt; …).AsNoTracking()</c> and differ in how the history source is
 /// filtered and ordered and in what the projection produces:
 /// <list type="bullet">
@@ -17,6 +19,9 @@ namespace Hindsight.Query;
 /// <item><c>AllVersions</c>: <c>history.Where(operation &lt;&gt; 3).OrderByDescending(valid_from)</c>
 /// (no period predicate; the <c>delete</c> tombstone is not a state version), projected to
 /// <c>new TEntity { … }</c>.</item>
+/// <item><c>FromTo</c> / <c>ContainedIn</c>: the <c>AllVersions</c> source with
+/// <c>tstzrange(valid_from, valid_to) &amp;&amp; tstzrange(@from, @to)</c> (resp. <c>&lt;@</c>) added to its
+/// filter (DESIGN.md D18), projected to <c>new TEntity { … }</c>.</item>
 /// <item><c>History&lt;T&gt;</c>: <c>history.OrderByDescending(valid_from).ThenByDescending(history_id)</c>
 /// (no filter at all — the tombstone is the delete audit), projected to
 /// <c>new Version&lt;TEntity&gt; { Entity = new TEntity { … }, ValidFrom = …, Operation = …, … }</c>.</item>
@@ -52,6 +57,11 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         .Single(m => m.Name == nameof(EntityFrameworkQueryableExtensions.AsNoTracking)
             && m.GetParameters().Length == 1);
 
+    // Public Npgsql range operators (NpgsqlRangeDbFunctionsExtensions), closed over DateTime: && and <@.
+    private static readonly MethodInfo _rangeOverlaps = RangeOperator(nameof(NpgsqlRangeDbFunctionsExtensions.Overlaps));
+
+    private static readonly MethodInfo _rangeContainedBy = RangeOperator(nameof(NpgsqlRangeDbFunctionsExtensions.ContainedBy));
+
     // The delete tombstone (DESIGN.md D5): operation = 3, empty interval [ts, ts). Not a state version.
     private const short DeleteOperation = 3;
 
@@ -84,6 +94,16 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
                 return RewriteMarker(node, HistoryReadKind.AllVersions);
             }
 
+            if (definition == HindsightQueryableExtensions.FromToMethod)
+            {
+                return RewriteMarker(node, HistoryReadKind.FromTo);
+            }
+
+            if (definition == HindsightQueryableExtensions.ContainedInMethod)
+            {
+                return RewriteMarker(node, HistoryReadKind.ContainedIn);
+            }
+
             if (definition == HindsightQueryableExtensions.HistoryMethod)
             {
                 return RewriteMarker(node, HistoryReadKind.History);
@@ -99,6 +119,8 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         {
             HistoryReadKind.AsOf => "AsOf()",
             HistoryReadKind.AllVersions => "AllVersions()",
+            HistoryReadKind.FromTo => "FromTo()",
+            HistoryReadKind.ContainedIn => "ContainedIn()",
             _ => "History<T>()",
         };
         var visitedSource = Visit(node.Arguments[0]);
@@ -156,7 +178,11 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         var historySource = kind switch
         {
             HistoryReadKind.AsOf => AsOfSource(historyRoot, bagType, periodStart, periodEnd, node.Arguments[1]),
-            HistoryReadKind.AllVersions => AllVersionsSource(historyRoot, bagType, periodStart),
+            HistoryReadKind.AllVersions => AllVersionsSource(historyRoot, bagType, periodStart, periodEnd, range: null),
+            HistoryReadKind.FromTo => AllVersionsSource(
+                historyRoot, bagType, periodStart, periodEnd, (_rangeOverlaps, node.Arguments[1], node.Arguments[2])),
+            HistoryReadKind.ContainedIn => AllVersionsSource(
+                historyRoot, bagType, periodStart, periodEnd, (_rangeContainedBy, node.Arguments[1], node.Arguments[2])),
             _ => HistorySource(historyRoot, bagType, periodStart),
         };
 
@@ -251,19 +277,38 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
     }
 
     // history.Where(EF.Property<short>(h, "operation") != 3).OrderByDescending(h => EF.Property<DateTime>(h, "valid_from"))
+    //
+    // FromTo / ContainedIn (DESIGN.md D18) are the same source with a period-range predicate added to the
+    // Where: TstzRange(valid_from, valid_to).Overlaps / .ContainedBy(TstzRange(@from, @to)), which EF
+    // translates to tstzrange(valid_from, valid_to) && / <@ tstzrange(@from, @to) — the expression the
+    // D14 GiST index is built on. The tombstone filter matters for ContainedIn: its empty range
+    // [ts, ts) is contained by every range, so without it every delete in the window would come back.
     private static MethodCallExpression AllVersionsSource(
         EntityQueryRootExpression historyRoot,
         Type bagType,
-        string periodStart)
+        string periodStart,
+        string periodEnd,
+        (MethodInfo Operator, Expression FromUtc, Expression ToUtc)? range)
     {
         var filterParam = Expression.Parameter(bagType, "h");
-        var notTombstone = Expression.Lambda(
-            Expression.NotEqual(
-                Property(filterParam, typeof(short), HindsightHistoryColumns.Operation),
-                Expression.Constant(DeleteOperation)),
-            filterParam);
+        Expression filter = Expression.NotEqual(
+            Property(filterParam, typeof(short), HindsightHistoryColumns.Operation),
+            Expression.Constant(DeleteOperation));
+
+        if (range is var (rangeOperator, fromUtc, toUtc))
+        {
+            var versionPeriod = Expression.Call(
+                PeriodRangeFunction.Method,
+                Property(filterParam, typeof(DateTime), periodStart),
+                Property(filterParam, typeof(DateTime), periodEnd));
+            var window = Expression.Call(PeriodRangeFunction.Method, fromUtc, toUtc);
+            filter = Expression.AndAlso(filter, Expression.Call(rangeOperator, versionPeriod, window));
+        }
+
         var filtered = Expression.Call(
-            _queryableWhere.MakeGenericMethod(bagType), historyRoot, Expression.Quote(notTombstone));
+            _queryableWhere.MakeGenericMethod(bagType),
+            historyRoot,
+            Expression.Quote(Expression.Lambda(filter, filterParam)));
 
         var orderParam = Expression.Parameter(bagType, "h");
         var validFrom = Expression.Lambda(Property(orderParam, typeof(DateTime), periodStart), orderParam);
@@ -341,10 +386,23 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
     private static MethodCallExpression Property(Expression bag, Type clrType, string name)
         => Expression.Call(_efProperty.MakeGenericMethod(clrType), bag, Expression.Constant(name));
 
+    // Overlaps<T>(NpgsqlRange<T>, NpgsqlRange<T>) / ContainedBy<T>(NpgsqlRange<T>, NpgsqlRange<T>): the
+    // range-with-range overloads, not the ones taking a multirange or a bare element.
+    private static MethodInfo RangeOperator(string name)
+        => typeof(NpgsqlRangeDbFunctionsExtensions).GetMethods()
+            .Single(m => m.Name == name
+                && m.IsGenericMethodDefinition
+                && m.GetParameters().Length == 2
+                && m.GetParameters().All(p => p.ParameterType.IsGenericType
+                    && p.ParameterType.GetGenericTypeDefinition() == typeof(NpgsqlRange<>)))
+            .MakeGenericMethod(typeof(DateTime));
+
     private enum HistoryReadKind
     {
         AsOf,
         AllVersions,
+        FromTo,
+        ContainedIn,
         History,
     }
 }

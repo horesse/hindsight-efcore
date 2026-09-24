@@ -42,8 +42,8 @@ Here is a policy created at 09:00, activated at 09:05 and deleted at 10:00:
 A delete closes the open version and writes a **tombstone**: a row with the last values and an empty
 period (`valid_from = valid_to`). It never matches a point-in-time query, so after 10:00 `AsOf` finds
 nothing, but it records *when* the policy was deleted and *who* did it.
-[`History<T>`](/querying/history) returns tombstones; [`AsOf`](/querying/as-of) and
-[`AllVersions`](/querying/all-versions) do not.
+[`History<T>`](/querying/history) returns tombstones; [`AsOf`](/querying/as-of),
+[`AllVersions`](/querying/all-versions) and the [time-range operators](/querying/time-ranges) do not.
 
 ## One timestamp per transaction
 

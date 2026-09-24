@@ -4,8 +4,9 @@ order: 40
 
 # Rules for historical queries
 
-These apply to `AsOf`, `AllVersions` and `History<T>`. Each rule exists because breaking it would
-return a result that looks right and is not; in every case Hindsight throws instead.
+These apply to `AsOf`, `AllVersions`, `FromTo`, `ContainedIn` and `History<T>`. Each rule exists
+because breaking it would return a result that looks right and is not; in every case Hindsight throws
+instead.
 
 ## History is read-only
 
@@ -28,11 +29,11 @@ never existed together.
 
 Load related rows with a second historical query, keyed on the foreign key you already have.
 
-## `AsOf` and `AllVersions` come first
+## `AsOf`, `AllVersions`, `FromTo` and `ContainedIn` come first {#asof-and-allversions-come-first}
 
 Put them directly on the `DbSet`, before `Where`, `OrderBy` or `Select`.
-`db.Policies.Where(…).AsOf(t)` throws. (`History<T>()` starts from the `DbContext`, so there is
-nothing to put before it.)
+`db.Policies.Where(…).AsOf(t)` throws, and so does `db.Policies.Where(…).FromTo(from, to)`.
+(`History<T>()` starts from the `DbContext`, so there is nothing to put before it.)
 
 ## No `ExecuteUpdate` or `ExecuteDelete`
 

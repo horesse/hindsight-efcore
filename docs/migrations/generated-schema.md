@@ -33,7 +33,7 @@ index on a history table breaks on the second edit of a row. Don't add them by h
 | index | definition | serves |
 |---|---|---|
 | `ix_<history_table>_version` | btree on `(<primary key columns>, valid_from desc)` | historical queries filtered by the entity's key |
-| `ix_<history_table>_period` | `gist (tstzrange(valid_from, valid_to))` | point-in-time queries that are not filtered by key |
+| `ix_<history_table>_period` | `gist (tstzrange(valid_from, valid_to))` | time-range queries ([`FromTo`, `ContainedIn`](/querying/time-ranges)) that are not filtered by key |
 
 The period index needs no extension: range types have a GiST operator class in PostgreSQL core. Both
 indexes are created once, with the table, and never changed by a later migration. History tables

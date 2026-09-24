@@ -64,7 +64,7 @@ samples/                                        InsuranceSample drives the `dotn
 benchmarks/Hindsight.Benchmarks/                BenchmarkDotNet; numbers go into README
 docs/                                           VitePress site, versioned; how it works: docs/README.md
 docs/snippets/                                  every C# sample on the site; compiled with the solution
-DESIGN.md                                       decisions D1–D16 + open questions
+DESIGN.md                                       decisions D1–D18 + open questions
 ```
 
 ## Conventions

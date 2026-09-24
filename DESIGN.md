@@ -1024,6 +1024,50 @@ credential holder abusing them outside the app) is left to each caller: opt-in m
 decides it is worth it pays for it, and the caller who does not is unaffected — the trust-model
 docs above (`docs/writing/change-context.md` → Trust model) explain the trade-off either way.
 
+## D17. `Diff` compares two versions in memory, from the model — added 2026-09-25
+
+`db.Diff(older, newer)` returns the versioned properties whose values differ between two versions of
+one entity, as `PropertyChange { IProperty Property, object? OldValue, object? NewValue }`. Two
+overloads, both extensions on `DbContext` (`HindsightDbContextExtensions`, now `partial`): one over
+`Version<TEntity>` for `History<T>()` results, one over plain `TEntity` for `AsOf` / `AllVersions`
+snapshots or a loaded current entity.
+
+- **In memory, not in SQL.** The inputs are already-materialized snapshots; comparing them needs only
+  the model. A SQL `lag()` window would mean a fourth rewrite in `HistoryQueryRootRewriter` for
+  something the caller can do with a list they already hold, and would not help the `AsOf`-vs-now case.
+- **The model comes from the `DbContext`.** `Version<TEntity>` is a projection the rewriter builds
+  (D12); carrying an `IModel` on it would put metadata into every row and couple the read path to this
+  feature. The per-entity plan — versioned properties, key properties — is computed once and cached as
+  a runtime annotation (`HindsightAnnotationNames.DiffPlan`).
+- **Which properties.** The same selection as the Interceptor writer's `HistoryRowPlan`: not
+  `Exclude(...)`-d, and mirrored onto the history table. Period and change-context columns are not
+  source properties, so they never appear. Order is `GetProperties()` order (key first).
+- **Equality is the property's `ValueComparer`** (`IReadOnlyProperty.GetValueComparer()`, public API),
+  so arrays (`text[]`, `bytea`), collections and converted values compare by content, exactly as change
+  tracking does; the key check uses `GetKeyValueComparer()`. Values are read with
+  `IPropertyBase.GetGetter()`. No `*.Internal`, no reflection (golden rule 1). Verified on real
+  PostgreSQL with both writers for `text[]`, `jsonb`, `bytea` and enum-as-string.
+- **Throws rather than guesses (golden rule 2).** Different keys, `older` not strictly before `newer`
+  (the `Version` overload; for one entity, two state versions always have strictly increasing
+  `ValidFrom`, D3/D5), or a delete tombstone on either side → `ArgumentException`. The tombstone repeats
+  the last state's values (D5), so a diff against it would almost always be empty and read as "deleted,
+  nothing changed"; the delete is read from `Operation`. `older == null` is "against nothing": every
+  versioned property, key included, with a `null` old value.
+- **Versioned shadow properties → `NotSupportedException`.** History records them, but the snapshot
+  the rewriter reconstructs binds CLR members only (D12 `BuildBindings` skips shadow properties), so a
+  change to, say, a shadow foreign key would be invisible and the diff partial. Carrying shadow values
+  would need the read side to change; revisit together with it.
+- **The no-op update is not hidden.** The Interceptor writer records a version when EF marks a
+  versioned property modified with an unchanged value (D3); its diff is empty, and the docs say so.
+- **No change-context fields on `PropertyChange`.** Who/when stay on `Version<TEntity>`, so the diff
+  adds no new names to the `ChangedBy` / `ChangeContext.UserId` inconsistency.
+- **Not added:** a helper that turns a whole `History<T>()` sequence into per-version change sets. It
+  needs grouping by key and rules around delete / re-insert that callers may want differently; the
+  pairwise call covers it in a short loop (`docs/querying/diff.md`). Revisit on demand.
+
+Tests: `VersionDiffTests` in `Hindsight.Tests` (comparison and every rejected argument, on hand-built
+versions) and in `Hindsight.IntegrationTests` (both writers, what `History<T>()` returns).
+
 ## Open questions (resolve in the spike, then move up)
 
 ### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12

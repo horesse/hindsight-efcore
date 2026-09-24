@@ -71,4 +71,10 @@ public static class HindsightAnnotationNames
     /// <see langword="true"/>.
     /// </summary>
     internal const string OrphanedTriggerPending = Prefix + "OrphanedTriggerPending";
+
+    /// <summary>
+    /// Runtime annotation on a temporal entity type: its cached <c>VersionDiffPlan</c> — the versioned
+    /// properties <c>Diff</c> compares, resolved once per model rather than on every call.
+    /// </summary>
+    internal const string DiffPlan = Prefix + "DiffPlan";
 }

@@ -1,1 +1,7 @@
 #nullable enable
+Hindsight.PropertyChange
+Hindsight.PropertyChange.NewValue.get -> object?
+Hindsight.PropertyChange.OldValue.get -> object?
+Hindsight.PropertyChange.Property.get -> Microsoft.EntityFrameworkCore.Metadata.IProperty!
+static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, Hindsight.Version<TEntity!>? older, Hindsight.Version<TEntity!>! newer) -> System.Collections.Generic.IReadOnlyList<Hindsight.PropertyChange!>!
+static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, TEntity? older, TEntity! newer) -> System.Collections.Generic.IReadOnlyList<Hindsight.PropertyChange!>!

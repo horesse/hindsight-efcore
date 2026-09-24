@@ -22,6 +22,7 @@
     <Project Path="tests/Hindsight.Analyzers.Tests/Hindsight.Analyzers.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/HistoryViewerSample/HistoryViewerSample.csproj" />
     <Project Path="samples/InsuranceSample/InsuranceSample.csproj" />
     <Project Path="samples/ProductCatalogSample/ProductCatalogSample.csproj" />
     <Project Path="samples/TaskTrackerSample/TaskTrackerSample.csproj" />

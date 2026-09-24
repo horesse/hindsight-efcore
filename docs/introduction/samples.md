@@ -4,18 +4,19 @@ order: 25
 
 # Samples
 
-Two runnable console apps, each a self-contained tour of one side of Hindsight. Neither needs a
-database of your own - both start and tear down their own disposable PostgreSQL 17 container, so
-`dotnet run` is the whole setup.
+Two runnable console apps, each a self-contained tour of one side of Hindsight, and a small web page
+that puts them together into a history screen. None needs a database of your own - each starts and
+tears down its own disposable PostgreSQL 17 container, so `dotnet run` is the whole setup.
 
 | | demonstrates | writer |
 |---|---|---|
 | [`ProductCatalogSample`](https://github.com/horesse/hindsight-efcore/tree/master/samples/ProductCatalogSample) | `AsOf`, `AllVersions`, `History<T>`, delete tombstones | `HistoryWriter.Interceptor` (the default) |
 | [`TaskTrackerSample`](https://github.com/horesse/hindsight-efcore/tree/master/samples/TaskTrackerSample) | who changed a row and why, and what a raw `ExecuteUpdate` leaves behind | `HistoryWriter.Trigger` |
+| [`HistoryViewerSample`](https://github.com/horesse/hindsight-efcore/tree/master/samples/HistoryViewerSample) | a read-only history screen: timeline, `Diff` between versions, `AsOf` at any instant | `HistoryWriter.Trigger` |
 
 The [tutorial](/tutorials/audit-trail) walks through the third sample project,
 [`InsuranceSample`](https://github.com/horesse/hindsight-efcore/tree/master/samples/InsuranceSample),
-step by step against an ASP.NET Core API; these two are shorter and meant to just be run.
+step by step against an ASP.NET Core API; these are shorter and meant to just be run.
 
 ## Product catalog
 
@@ -56,6 +57,38 @@ change-context column, since there's no `SaveChanges` call for a provider to att
 [Choosing a history writer](/writing/history-writers#side-by-side)):
 
 <<< @/../samples/TaskTrackerSample/Program.cs#bulk-write
+
+## History viewer
+
+```bash
+dotnet run --project samples/HistoryViewerSample
+```
+
+A read-only web page over the product catalog, showing what an audit or "history" screen built on
+Hindsight looks like. It seeds three products with several versions each (price changes, a rename, a
+delete, three users, a reason on every change), then opens `http://localhost:5080` in your browser. It
+uses `HistoryWriter.Trigger`, so the timeline also shows a bulk `ExecuteUpdate`.
+
+![The timeline of one product: who changed it, when, why and what changed, with the version in effect at the chosen instant highlighted](/images/samples/history-viewer.png)
+
+The product list comes from `History<Product>()`, so deleted products stay on it. The newest row per
+product is its latest state, or its delete tombstone:
+
+<<< @/../samples/HistoryViewerSample/HistoryQueries.cs#product-list
+
+A product's timeline is its `History<Product>()` rows with who, when and why, and each version
+[diffed](/querying/diff) against the one before it. The delete tombstone has no state to compare, so
+the loop skips it:
+
+<<< @/../samples/HistoryViewerSample/HistoryQueries.cs#timeline
+
+The row that `ExecuteUpdate` wrote has no change context: no `SaveChanges` ran, so there was nothing to
+attach one to, and the page says so instead of showing an empty name. Picking an instant shows the
+product as it was then, with [`AsOf`](/querying/as-of):
+
+<<< @/../samples/HistoryViewerSample/HistoryQueries.cs#as-of
+
+The page has no edit or restore button: history is [read-only](/querying/restrictions#history-is-read-only).
 
 ## Next steps
 

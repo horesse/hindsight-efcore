@@ -4,9 +4,10 @@ using Microsoft.EntityFrameworkCore;
 namespace Hindsight;
 
 /// <summary>
-/// <see cref="DbContext"/> extensions for supplying change context at call sites.
+/// <see cref="DbContext"/> extensions for supplying change context at call sites and for comparing
+/// two versions of a temporal entity.
 /// </summary>
-public static class HindsightDbContextExtensions
+public static partial class HindsightDbContextExtensions
 {
     /// <summary>
     /// Opens a scope that sets the <c>reason</c> on every history row written by a <c>SaveChanges</c>

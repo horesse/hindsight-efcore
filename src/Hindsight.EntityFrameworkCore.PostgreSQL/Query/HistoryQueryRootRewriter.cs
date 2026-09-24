@@ -21,7 +21,7 @@ namespace Hindsight.Query;
 /// <c>new TEntity { … }</c>.</item>
 /// <item><c>FromTo</c> / <c>ContainedIn</c>: the <c>AllVersions</c> source with
 /// <c>tstzrange(valid_from, valid_to) &amp;&amp; tstzrange(@from, @to)</c> (resp. <c>&lt;@</c>) added to its
-/// filter (DESIGN.md D17), projected to <c>new TEntity { … }</c>.</item>
+/// filter (DESIGN.md D18), projected to <c>new TEntity { … }</c>.</item>
 /// <item><c>History&lt;T&gt;</c>: <c>history.OrderByDescending(valid_from).ThenByDescending(history_id)</c>
 /// (no filter at all — the tombstone is the delete audit), projected to
 /// <c>new Version&lt;TEntity&gt; { Entity = new TEntity { … }, ValidFrom = …, Operation = …, … }</c>.</item>
@@ -278,7 +278,7 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 
     // history.Where(EF.Property<short>(h, "operation") != 3).OrderByDescending(h => EF.Property<DateTime>(h, "valid_from"))
     //
-    // FromTo / ContainedIn (DESIGN.md D17) are the same source with a period-range predicate added to the
+    // FromTo / ContainedIn (DESIGN.md D18) are the same source with a period-range predicate added to the
     // Where: TstzRange(valid_from, valid_to).Overlaps / .ContainedBy(TstzRange(@from, @to)), which EF
     // translates to tstzrange(valid_from, valid_to) && / <@ tstzrange(@from, @to) — the expression the
     // D14 GiST index is built on. The tombstone filter matters for ContainedIn: its empty range

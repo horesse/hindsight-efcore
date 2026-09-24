@@ -42,5 +42,8 @@ For a filter on `Entity.Status` (from Hindsight's test suite):
 <<< @/../tests/Hindsight.IntegrationTests/HistoryQueryTests.History_generates_the_expected_sql.verified.sql
 :::
 
+To list which properties changed from one version to the next, pass two versions to
+[`Diff`](/querying/diff).
+
 The same [rules](/querying/restrictions) as for `AsOf` and `AllVersions` apply, including to
 `Version<T>.Entity`: it is read-only.

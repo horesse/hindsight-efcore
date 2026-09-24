@@ -8,7 +8,7 @@ namespace Hindsight.Conventions;
 /// <summary>
 /// Maps <see cref="PeriodRangeFunction.TstzRange"/> to PostgreSQL's built-in <c>tstzrange</c> on every
 /// Hindsight model, so the <c>FromTo</c> / <c>ContainedIn</c> rewrite can build a range over the period
-/// columns that the D14 GiST index serves (DESIGN.md D17). A function mapping is not part of the
+/// columns that the D14 GiST index serves (DESIGN.md D18). A function mapping is not part of the
 /// migrations model, so it never shows up in a migration or a model snapshot.
 /// </summary>
 internal sealed class PeriodRangeFunctionConvention : IModelInitializedConvention

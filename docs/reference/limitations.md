@@ -14,6 +14,7 @@ Each of these fails loudly, so you find out during development rather than from 
 | `Include` on a historical query | `NotSupportedException` | a second historical query keyed on the foreign key |
 | `AsOf` / `AllVersions` / `FromTo` / `ContainedIn` after another operator | throws | put them first, on the `DbSet` |
 | `ExecuteUpdate` / `ExecuteDelete` on a historical query | `NotSupportedException` | run them on a normal query of the current rows |
+| `Diff` on an entity with a versioned shadow property (such as a foreign key with no CLR property) | `NotSupportedException` | map the property on the entity class; see [Diff](/querying/diff#what-throws) |
 | Owned references and complex properties on a temporal entity | `NotSupportedException` at model build | a standalone entity without them |
 | Inheritance hierarchies | rejected at model build | map the temporal entity on its own |
 | Restoring an entity to an old version | saving a historical snapshot throws `InvalidOperationException` | [copy the values](/querying/restrictions#history-is-read-only) onto the current entity |

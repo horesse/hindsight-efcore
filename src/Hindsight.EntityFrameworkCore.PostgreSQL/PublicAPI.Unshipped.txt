@@ -1,1 +1,3 @@
 #nullable enable
+static Hindsight.HindsightQueryableExtensions.ContainedIn<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!
+static Hindsight.HindsightQueryableExtensions.FromTo<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!

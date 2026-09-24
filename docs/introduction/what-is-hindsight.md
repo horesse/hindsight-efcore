@@ -12,6 +12,7 @@ That answers questions an ordinary table cannot:
 
 - *What did this policy look like when the claim was filed?* ([`AsOf`](/querying/as-of))
 - *How has this premium changed over time?* ([`AllVersions`](/querying/all-versions))
+- *Which states was it in during Q3?* ([`FromTo` and `ContainedIn`](/querying/time-ranges))
 - *Who changed it, when, and why? Who deleted it?* ([`History<T>`](/querying/history))
 
 <<< @/snippets/Overview.cs#overview

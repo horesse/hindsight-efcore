@@ -92,11 +92,13 @@ services.AddDbContext<AppDbContext>(o => o
 ```csharp
 await db.Policies.AsOf(at).Where(...).ToListAsync();        // state at a point in time
 await db.Policies.AllVersions().Where(...).ToListAsync();   // every version, newest first
+await db.Policies.FromTo(q3Start, q3End).ToListAsync();     // every version valid at some point in [from, to)
 await db.History<Policy>().Where(v => ...).ToListAsync();   // versions with metadata, tombstones included
 ```
 
-Historical queries are always no-tracking; treat the results as read-only snapshots. `AsOf` and
-`AllVersions` must be the first call on the `DbSet` — see
+Historical queries are always no-tracking; treat the results as read-only snapshots. `AsOf`,
+`AllVersions` and the [time-range operators](https://horesse.github.io/hindsight-efcore/latest/querying/time-ranges)
+`FromTo` / `ContainedIn` must be the first call on the `DbSet` — see
 [rules for historical queries](https://horesse.github.io/hindsight-efcore/latest/querying/restrictions),
 including why `AsOf` combined with `Include` throws instead of guessing.
 

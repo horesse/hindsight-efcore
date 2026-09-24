@@ -12,7 +12,7 @@ Each of these fails loudly, so you find out during development rather than from 
 |---|---|---|
 | Application time and bitemporal history | not implemented; the API leaves room to add it without breaking changes | PostgreSQL 19's `FOR PORTION OF` for application time |
 | `Include` on a historical query | `NotSupportedException` | a second historical query keyed on the foreign key |
-| `AsOf` / `AllVersions` after another operator | throws | put them first, on the `DbSet` |
+| `AsOf` / `AllVersions` / `FromTo` / `ContainedIn` after another operator | throws | put them first, on the `DbSet` |
 | `ExecuteUpdate` / `ExecuteDelete` on a historical query | `NotSupportedException` | run them on a normal query of the current rows |
 | Owned references and complex properties on a temporal entity | `NotSupportedException` at model build | a standalone entity without them |
 | Inheritance hierarchies | rejected at model build | map the temporal entity on its own |

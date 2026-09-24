@@ -6,8 +6,9 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 namespace Hindsight.Query;
 
 /// <summary>
-/// The query hook that makes <see cref="HindsightQueryableExtensions.AsOf{TEntity}"/> and
-/// <see cref="HindsightQueryableExtensions.AllVersions{TEntity}"/> work. Registered by
+/// The query hook that makes <see cref="HindsightQueryableExtensions.AsOf{TEntity}"/>,
+/// <see cref="HindsightQueryableExtensions.AllVersions{TEntity}"/>, <see cref="HindsightQueryableExtensions.FromTo{TEntity}"/>,
+/// <see cref="HindsightQueryableExtensions.ContainedIn{TEntity}"/> and <c>History&lt;T&gt;</c> work. Registered by
 /// <see cref="Infrastructure.HindsightOptionsExtension"/>. On every query compilation it looks for one
 /// of those markers; if there is none the tree is returned untouched, otherwise
 /// <see cref="HistoryQueryRootRewriter"/> rewrites the marked roots (DESIGN.md D12).
@@ -28,7 +29,8 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         if (scan.HasInclude)
         {
             throw new NotSupportedException(
-                "AsOf() / AllVersions() / History<T>() cannot be combined with Include() / ThenInclude() (DESIGN.md D8): "
+                "Historical queries (AsOf / AllVersions / FromTo / ContainedIn / History<T>) cannot be combined with "
+                + "Include() / ThenInclude() (DESIGN.md D8): "
                 + "reading related entities from history is an interval join, and a silently wrong result would be "
                 + "worse than the missing feature. Load the related rows with a separate history query, or use FromSql.");
         }
@@ -36,26 +38,30 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         if (scan.HasTrackingOperator)
         {
             throw new InvalidOperationException(
-                "AsOf() / AllVersions() / History<T>() results are always no-tracking (DESIGN.md D7). Remove AsTracking() / "
+                "Historical query (AsOf / AllVersions / FromTo / ContainedIn / History<T>) results are always "
+                + "no-tracking (DESIGN.md D7). Remove AsTracking() / "
                 + "AsTrackingWithIdentityResolution() from the query.");
         }
 
         if (scan.HasBulkOperation)
         {
             throw new NotSupportedException(
-                "AsOf() / AllVersions() / History<T>() cannot be combined with ExecuteUpdate() / ExecuteDelete() "
+                "Historical queries (AsOf / AllVersions / FromTo / ContainedIn / History<T>) cannot be combined with "
+                + "ExecuteUpdate() / ExecuteDelete() "
                 + "(DESIGN.md D7): historical results are read-only, and unlike a tracked SaveChanges these bulk "
                 + "operations bypass that guard entirely — EF Core translates the rewritten query's source directly, "
                 + "which for ExecuteUpdate resolves to an UPDATE against the history table itself, silently "
                 + "corrupting the audit trail (ExecuteDelete happens to be rejected by EF Core's own translator "
                 + "today, but that is not a guarantee this package can rely on). Load the matching current entities "
-                + "with a normal query (no AsOf / AllVersions / History<T>()) and call ExecuteUpdate / ExecuteDelete "
+                + "with a normal query (no AsOf / AllVersions / FromTo / ContainedIn / History<T>) and call "
+                + "ExecuteUpdate / ExecuteDelete "
                 + "on those instead.");
         }
 
         var model = eventData.Context?.Model
             ?? throw new InvalidOperationException(
-                "AsOf() / AllVersions() / History<T>(): the query has no DbContext model to resolve the history table from.");
+                "Historical query (AsOf / AllVersions / FromTo / ContainedIn / History<T>): the query has no "
+                + "DbContext model to resolve the history table from.");
 
         var rewriter = new HistoryQueryRootRewriter(model);
         var rewritten = rewriter.Visit(queryExpression);
@@ -67,7 +73,7 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
     }
 
     /// <summary>
-    /// One pass over the tree recording whether it uses <c>AsOf</c>, <c>AllVersions</c> or
+    /// One pass over the tree recording whether it uses <c>AsOf</c>, <c>AllVersions</c>, <c>FromTo</c>, <c>ContainedIn</c> or
     /// <c>History&lt;T&gt;</c>, and — so their combination can be rejected with a Hindsight message
     /// rather than a downstream EF one — whether it also uses <c>Include</c> / <c>ThenInclude</c>, an
     /// explicit tracking operator, or <c>ExecuteUpdate</c> / <c>ExecuteDelete</c>.
@@ -123,6 +129,8 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
         private static bool IsHistoryMarker(MethodInfo definition)
             => definition == HindsightQueryableExtensions.AsOfMethod
                 || definition == HindsightQueryableExtensions.AllVersionsMethod
+                || definition == HindsightQueryableExtensions.FromToMethod
+                || definition == HindsightQueryableExtensions.ContainedInMethod
                 || definition == HindsightQueryableExtensions.HistoryMethod;
     }
 }

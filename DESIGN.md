@@ -570,6 +570,9 @@ The projection, the `AsNoTracking`, and every guard (first operator, non-tempora
   `OrderBy` / `OrderByDescending` replaces the default (standard LINQ — EF drops the overridden
   `ORDER BY`), a trailing `ThenBy` keeps newest-first primary.
 
+**`FromTo()` / `ContainedIn()` use the same mechanism (added 2026-09-25)**: the `AllVersions` source
+with a `tstzrange` overlap / containment predicate added — see D17.
+
 **`History<T>()` uses the same mechanism, wrapping the entity in `Version<TEntity>` (added
 2026-09-10).** `db.History<Policy>()` is an extension on `DbContext` (not `DbSet` — the doc shape
 `db.History<Policy>()` won, and there is nothing a caller could put "before" a `DbContext`); it
@@ -1023,6 +1026,69 @@ on every history table, given it does not defend against the more likely threat 
 credential holder abusing them outside the app) is left to each caller: opt-in means the caller who
 decides it is worth it pays for it, and the caller who does not is unaffected — the trust-model
 docs above (`docs/writing/change-context.md` → Trust model) explain the trade-off either way.
+
+## D17. Time-range operators `FromTo` / `ContainedIn` — implemented 2026-09-25
+
+`queryable.FromTo(from, to)` and `queryable.ContainedIn(from, to)` answer window questions ("every
+version valid at some point in Q3", "every version that started and ended inside this period"), next to
+`AsOf` (one instant) and `AllVersions` (the whole timeline). Same mechanism as D12: a marker call, the
+same `IQueryExpressionInterceptor` hook, root replacement in `HistoryQueryRootRewriter`, the same
+projection, `AsNoTracking()`, save-back tag (D7) and every guard (first operator, non-temporal,
+`Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex). The history source is
+`AllVersions`' with a range predicate added to its filter:
+
+| operator | SQL | as comparisons |
+|---|---|---|
+| `FromTo` | `operation <> 3 AND tstzrange(valid_from, valid_to) && tstzrange(@FromUtc, @ToUtc)` | `valid_from < @to AND valid_to > @from` |
+| `ContainedIn` | `operation <> 3 AND tstzrange(valid_from, valid_to) <@ tstzrange(@FromUtc, @ToUtc)` | `valid_from >= @from AND valid_to <= @to` |
+
+- **Two operators, no `Between`.** SQL Server's `FROM a TO b` and `BETWEEN a AND b` differ only in
+  whether the window's upper bound is inclusive. With half-open periods everywhere (D5) the window is
+  half-open too, `[from, to)`, which is exactly `FROM..TO`; `BETWEEN` would be the one closed bound in
+  the API, equal to `FromTo(from, to + 1µs)`, and in .NET the name reads as "inclusive at both ends".
+  Adding it later is non-breaking if a real need appears.
+- **Boundaries follow the range semantics.** A version ending exactly at `from` or starting exactly at
+  `to` never overlaps the window; `ContainedIn` includes a version starting at `from` and one ending at
+  `to`. `DateTimeOffset.MaxValue` becomes `'infinity'` (Npgsql's default conversion), so it means "no
+  upper bound" — the only way the open current version is contained in a window.
+- **`from == to` returns nothing; `from > to` throws `ArgumentOutOfRangeException` at the call.**
+  `tstzrange(t, t)` is empty and overlaps nothing. SQL Server's `FROM t TO t` instead returns versions
+  strictly spanning `t` — a quirk of its comparisons, not a semantic worth copying; `AsOf(t)` is the
+  instant query. An empty window computed from data is a legitimate input with a correct empty
+  answer, so it does not throw. `from > to` would make PostgreSQL raise "range lower bound must be less
+  than or equal to range upper bound" at execution, naming neither the operator nor the argument.
+- **Tombstone excluded, as in `AllVersions`**, for the same reason (D12), and one more: the tombstone's
+  period is the empty range `[ts, ts)`, and PostgreSQL's `<@` holds for an empty range against *every*
+  range. Without `operation <> 3`, `ContainedIn` would return each delete in the window as a
+  data-duplicate of the last real version. For `&&` the filter is redundant (an empty range overlaps
+  nothing) and kept for one shape.
+- **Order `valid_from DESC`**, baked in exactly like `AllVersions`; a caller `OrderBy` replaces it.
+- **Written on `tstzrange(valid_from, valid_to)` so the D14 GiST index applies.** Plain column
+  comparisons cannot use an expression index. Npgsql does not translate `new NpgsqlRange<DateTime>(col,
+  col)`, so Hindsight maps an internal stub `PeriodRangeFunction.TstzRange(DateTime, DateTime)` to the
+  built-in function with the public `HasDbFunction(...).HasName("tstzrange").IsBuiltIn()` — registered
+  by `PeriodRangeFunctionConvention` (an `IModelInitializedConvention`) on every Hindsight model — and
+  applies Npgsql's public `NpgsqlRangeDbFunctionsExtensions.Overlaps` / `ContainedBy`. No EF Core or
+  Npgsql `*.Internal` types, no `FromSql`. A function mapping is not part of the migrations model, so it
+  adds no DDL and nothing to a model snapshot. `TimeRangeQueryTests` proves the index is *applicable*
+  with `EXPLAIN` under `SET LOCAL enable_seqscan = off` (on three rows the planner rightly prefers a
+  sequential scan; whether it chooses the index on real data is its call).
+- **Parameterised.** Both bounds are member accesses on one captured `RangeParameter` object, not
+  `Expression.Constant`, so they reach SQL as `@FromUtc` / `@ToUtc` and every window shares one
+  compiled query (as for `AsOf`, D12).
+- **No `History<T>` overload.** `db.History<T>().Where(v => v.ValidFrom >= from && v.ValidFrom < to)`
+  ("changes made in the window", tombstones included) or an overlap filter on `ValidFrom` / `ValidTo`
+  already compose; they compare the columns through the `::timestamptz` cast and do not use the GiST
+  index. An indexed `History<T>` window is a separate, additive change if needed.
+
+`AsOf` itself still compiles to `valid_from <= @t AND valid_to > @t`, served by the version index when
+the key is filtered; moving it onto `tstzrange(...) @> @t` is a separate decision, not taken here.
+
+Covered by `TimeRangeQueryTests` (Testcontainers: every boundary above, empty window, `MaxValue`,
+non-UTC offsets, tombstone exclusion for both operators, composition with `Where`/`Select`/`Count`/
+`Concat`/`AsOf`, one SQL text for two windows, no-tracking, save-back guard, composite key, the
+`EXPLAIN` test, each guard, and a Verify SQL snapshot per operator) and `TimeRangeOperatorTests`
+(unit: argument validation, the `tstzrange` mapping, no extra DDL, translated SQL and UTC parameters).
 
 ## Open questions (resolve in the spike, then move up)
 

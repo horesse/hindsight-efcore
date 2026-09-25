@@ -1176,3 +1176,51 @@ before upgrading, which keeps 1.x behavior unchanged."
 **What would make us revisit/resolve this:** a decision, before a 2.0 milestone is cut, on whether the
 default flips (see D11 — a 2.0 milestone should track this so it isn't decided by drive-by PR); if it
 does, the upgrade guide above ships in the same release, not after.
+
+### Can a temporal entity carry complex properties and owned references? — opened 2026-09-25
+
+D9 rejects both at model finalization (and D12 on the read side) because four places only look at the
+owner's own `GetProperties()`: `MirrorEntityColumns` (the columns never reach history),
+`HistoryRowPlan.HasVersionedModification` (a save that touches only a nested member writes **no** row —
+golden rule 2), the D6 diff (nested columns are invisible to orphaning and facet checks) and the D12
+projection (the member would come back empty). D9 also sets the bar for lifting it: **read and write
+move together, no partial support.** This question asks whether they can, on public API only.
+
+**In scope:** complex properties (`ComplexProperty`, table-split, including nested complex-in-complex and
+EF 10 optional complex properties; and JSON-mapped with `ToJson()`), owned references (`OwnsOne`,
+table-split and `ToJson()`). **Out of scope, stays rejected:** owned collections (no columns on the
+owner's table). Complex collections (JSON-only in EF 10) are rejected unless the JSON hypothesis below
+covers them at no extra cost.
+
+**Hypotheses, each proven or refuted by one Testcontainers test:**
+
+- (a) *Mirroring.* Every column of a table-split nested member can be mirrored onto the property-bag
+  history entity type with the existing facet copying (D2), found through public metadata
+  (`ITypeBase.GetFlattenedProperties()` for complex types, the owned `IEntityType`'s properties via its
+  ownership navigation), and the generated history table matches the main table's nested columns in
+  `information_schema`. The owned type's shadow key shares the owner's key column and must not be
+  mirrored twice.
+- (b) *Projection.* `AsOf` / `AllVersions` / `History<T>` can reconstruct the member as a nested
+  `new Address { … }` inside the existing member-init over `EF.Property` (D12), no tracking, one SQL
+  statement, and a caller `Where(p => p.Address.City == …)` still translates. An optional member whose
+  columns are all `NULL` comes back `null` under the same rule EF applies to the main table.
+- (c) *Change detection (Interceptor).* A `SaveChanges` that modifies only a nested member is visible on
+  public ChangeTracker API — `EntityEntry.ComplexProperty(…)` / `ComplexPropertyEntry.IsModified` for
+  complex members; for owned members, whose owned `EntityEntry` is `Modified` / `Added` / `Deleted`
+  while the owner stays `Unchanged`, via `ReferenceEntry.TargetEntry` from the owner — and its values
+  are readable with `PropertyValues[IProperty]`, so exactly one history row is written.
+- (d) *JSON.* For `ToJson()` members, mirroring the single `jsonb` container column is enough: the
+  Trigger writer copies `NEW.<column>` as is, and the Interceptor can obtain the serialized value
+  without EF's internal JSON writer (e.g. by reading the just-written column back in the same
+  transaction), and the read side can materialize it through public API.
+- (e) *Trigger and migrations.* The Trigger function, the D6 seed and the D6 orphaning pick up nested
+  columns with no special case, because they already work from the history entity type's columns; adding
+  or removing a nested member yields `AddColumn` / an orphaned column and never a `DropColumn`.
+
+**Fallback:** any shape whose hypothesis fails keeps being rejected with a `NotSupportedException` that
+names the shape and the alternative (`FromSql`, or flattening it into scalar properties). Never partial
+support: a shape is accepted only when mirroring, both writers, the D6 diff and all read paths handle it.
+
+**Depends on:** D2, D3, D5, D6, D9, D12, D13, D17 (the diff must either report nested members or reject
+them, as it does for versioned shadow properties). **Resolves into:** D9 rewritten in place, plus D19 if
+the mechanism needs its own entry.

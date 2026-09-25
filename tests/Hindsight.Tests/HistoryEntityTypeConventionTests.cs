@@ -129,29 +129,133 @@ public sealed class HistoryEntityTypeConventionTests
     }
 
     [Fact]
-    public void Temporal_entity_with_an_owned_reference_is_rejected()
+    public void History_entity_type_mirrors_the_columns_of_complex_properties_including_nested_ones()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithOwnedAddress>(e =>
+        var model = BuildModel(b => b.Entity<PolicyWithMembers>(e =>
         {
-            e.OwnsOne(p => p.BillingAddress);
+            e.ComplexProperty(p => p.Address, a => a.ComplexProperty(x => x.Geo));
+            e.ComplexProperty(p => p.Premium);
+            e.Ignore(p => p.Holder);
             e.IsTemporal();
-        })));
+        }));
 
-        Assert.Contains("owned or complex members", ex.Message);
+        var history = model.HistoryEntityType(typeof(PolicyWithMembers));
+        var columns = history.GetProperties().Select(p => p.GetColumnName()).ToList();
+
+        Assert.Contains("Address_Street", columns);
+        Assert.Contains("Address_City", columns);
+        Assert.Contains("Address_Geo_Lat", columns);
+        Assert.Contains("Premium_Amount", columns);
+        Assert.Contains("Premium_Currency", columns);
+        Assert.Equal(typeof(decimal?), history.GetProperty("Address_Geo_Lat").ClrType);
+        Assert.Equal("numeric(9,6)", history.GetProperty("Address_Geo_Lat").GetColumnType());
+        Assert.True(history.GetProperty("Address_City").IsNullable);
     }
 
     [Fact]
-    public void Temporal_entity_with_a_complex_property_is_rejected()
+    public void History_entity_type_mirrors_owned_reference_columns_without_repeating_the_shared_key()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithComplexMoney>(e =>
+        var model = BuildModel(b => b.Entity<PolicyWithMembers>(e =>
         {
-            e.ComplexProperty(p => p.Premium);
+            e.Ignore(p => p.Address);
+            e.Ignore(p => p.Premium);
+            e.OwnsOne(p => p.Holder, o => o.OwnsOne(h => h.Contact));
+            e.IsTemporal();
+        }));
+
+        var columns = model.HistoryEntityType(typeof(PolicyWithMembers)).GetProperties()
+            .Select(p => p.GetColumnName())
+            .ToList();
+
+        Assert.Contains("Holder_Name", columns);
+        Assert.Contains("Holder_Contact_Phone", columns);
+        Assert.Single(columns, c => c == "Id");
+    }
+
+    [Fact]
+    public void Temporal_entity_with_an_owned_collection_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithOwnedCollection>(e =>
+        {
+            e.OwnsMany(p => p.Addresses);
             e.IsTemporal();
         })));
 
-        Assert.Contains("owned or complex members", ex.Message);
+        Assert.Contains("'PolicyWithOwnedCollection.Addresses' is an owned collection", ex.Message);
     }
 
+    [Fact]
+    public void Temporal_entity_with_a_json_mapped_owned_reference_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithMembers>(e =>
+        {
+            e.Ignore(p => p.Address);
+            e.Ignore(p => p.Premium);
+            e.OwnsOne(p => p.Holder, o => o.ToJson());
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("'PolicyWithMembers.Holder' is an owned reference mapped to JSON", ex.Message);
+    }
+
+    [Fact]
+    public void Temporal_entity_with_a_json_mapped_complex_property_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithMembers>(e =>
+        {
+            e.ComplexProperty(p => p.Address, a => a.ToJson());
+            e.Ignore(p => p.Premium);
+            e.Ignore(p => p.Holder);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("'PolicyWithMembers.Address' is a complex property mapped to JSON", ex.Message);
+    }
+
+    [Fact]
+    public void Temporal_entity_with_a_complex_collection_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithOwnedCollection>(e =>
+        {
+            e.ComplexCollection(p => p.Addresses, a => a.ToJson());
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("'PolicyWithOwnedCollection.Addresses' is a complex collection", ex.Message);
+    }
+
+    [Fact]
+    public void Temporal_entity_with_an_owned_reference_in_a_table_of_its_own_is_rejected()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() => BuildModel(b => b.Entity<PolicyWithMembers>(e =>
+        {
+            e.Ignore(p => p.Address);
+            e.Ignore(p => p.Premium);
+            e.OwnsOne(p => p.Holder, o =>
+            {
+                o.ToTable("holders");
+                o.Ignore(h => h.Contact);
+            });
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("'PolicyWithMembers.Holder' is an owned reference mapped to a table of its own", ex.Message);
+    }
+
+    [Fact]
+    public void Nested_member_mapped_to_a_reserved_history_column_is_rejected()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => BuildModel(b => b.Entity<PolicyWithMembers>(e =>
+        {
+            e.ComplexProperty(p => p.Address, a => a.Property(x => x.City).HasColumnName("reason"));
+            e.Ignore(p => p.Premium);
+            e.Ignore(p => p.Holder);
+            e.IsTemporal();
+        })));
+
+        Assert.Contains("'Address.City'", ex.Message);
+        Assert.Contains("'reason'", ex.Message);
+    }
     [Theory]
     [InlineData("history_id")]
     [InlineData("operation")]
@@ -385,24 +489,51 @@ public sealed class HistoryEntityTypeConventionTests
         Active,
     }
 
-    private sealed class PolicyWithOwnedAddress
+    [Table("policies")]
+    private sealed class PolicyWithMembers
     {
         public int Id { get; set; }
         public string Number { get; set; } = "";
-        public Address BillingAddress { get; set; } = new();
+        public MemberAddress Address { get; set; } = new();
+        public Money Premium { get; set; }
+        public Holder? Holder { get; set; }
+    }
+
+    private sealed class MemberAddress
+    {
+        public string Street { get; set; } = "";
+        public string City { get; set; } = "";
+        public Geo Geo { get; set; } = new();
+    }
+
+    private sealed class Geo
+    {
+        [Column(TypeName = "numeric(9,6)")]
+        public decimal Lat { get; set; }
+    }
+
+    private sealed class Holder
+    {
+        public string Name { get; set; } = "";
+        public Contact? Contact { get; set; }
+    }
+
+    private sealed class Contact
+    {
+        public string Phone { get; set; } = "";
+    }
+
+    [Table("policies")]
+    private sealed class PolicyWithOwnedCollection
+    {
+        public int Id { get; set; }
+        public List<Address> Addresses { get; } = [];
     }
 
     private sealed class Address
     {
         public string Street { get; set; } = "";
         public string City { get; set; } = "";
-    }
-
-    private sealed class PolicyWithComplexMoney
-    {
-        public int Id { get; set; }
-        public string Number { get; set; } = "";
-        public Money Premium { get; set; }
     }
 
     private readonly record struct Money(decimal Amount, string Currency);

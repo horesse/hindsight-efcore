@@ -212,24 +212,16 @@ internal static class DeletedRowSnapshotReader
         {
             var table = sqlHelper.DelimitIdentifier(entityType.GetTableName()!, entityType.GetSchema());
 
-            // Mirrors HistoryRowPlan.BuildPending's VersionedColumns filter exactly: an excluded
-            // property never becomes a history column, so there is nothing to re-read it for.
+            // The same versioned columns HistoryRowPlan writes (TemporalWritePlan), nested complex and
+            // owned members included (DESIGN.md D9): an excluded property never becomes a history column,
+            // so there is nothing to re-read it for.
             var selectColumns = new List<(string, RelationalTypeMapping)>();
             var columnList = new List<string>();
-            foreach (var property in entityType.GetProperties())
+            foreach (var versioned in TemporalWritePlan.For(entityType)!.Columns)
             {
-                if (property.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is true)
-                {
-                    continue;
-                }
-
-                if (property.GetColumnName() is not { } column)
-                {
-                    continue;
-                }
-
-                columnList.Add(sqlHelper.DelimitIdentifier(column));
-                selectColumns.Add((column, property.GetRelationalTypeMapping()));
+                var property = (IProperty)versioned.Property;
+                columnList.Add(sqlHelper.DelimitIdentifier(versioned.Column));
+                selectColumns.Add((versioned.Column, property.GetRelationalTypeMapping()));
             }
 
             var keyBindings = new List<ColumnBinding>();

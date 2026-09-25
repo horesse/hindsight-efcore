@@ -23,7 +23,10 @@ internal sealed class PendingHistoryRow
     /// <summary>The generated property-bag history entity type this row is written into.</summary>
     public required IEntityType HistoryEntityType { get; init; }
 
-    /// <summary>The tracked state at the time of the snapshot: <c>Added</c>, <c>Modified</c> or <c>Deleted</c>.</summary>
+    /// <summary>
+    /// The history operation's state: <c>Added</c>, <c>Modified</c> or <c>Deleted</c>. <c>Modified</c> also
+    /// for an owner the change tracker reports <c>Unchanged</c> whose owned reference changed (DESIGN.md D9).
+    /// </summary>
     public required EntityState State { get; init; }
 
     /// <summary>
@@ -42,10 +45,10 @@ internal sealed class PendingHistoryRow
     public required IEntityType SourceEntityType { get; init; }
 
     /// <summary>
-    /// History column name → source property name for every versioned (non-excluded) column mirrored
-    /// onto the history table, including the primary-key columns.
+    /// Every versioned column mirrored onto the history table, including the primary-key columns and the
+    /// columns of table-split complex properties and owned references (DESIGN.md D9).
     /// </summary>
-    public required IReadOnlyList<KeyValuePair<string, string>> VersionedColumns { get; init; }
+    public required IReadOnlyList<VersionedColumn> VersionedColumns { get; init; }
 
     /// <summary>History column names of the source primary key, for the "close previous version" predicate.</summary>
     public required IReadOnlyList<string> KeyColumns { get; init; }
@@ -67,6 +70,71 @@ internal sealed class PendingHistoryRow
 }
 
 /// <summary>
+/// What the Interceptor writer needs for one temporal entity type, resolved once per model and cached as
+/// a runtime annotation (<see cref="HindsightAnnotationNames.WritePlan"/>).
+/// </summary>
+internal sealed class TemporalWritePlan
+{
+    public required IEntityType HistoryEntityType { get; init; }
+
+    /// <summary>The <see cref="VersionedColumns.Collect"/> columns that the history table actually has.</summary>
+    public required IReadOnlyList<VersionedColumn> Columns { get; init; }
+
+    public required IReadOnlyList<string> KeyColumns { get; init; }
+
+    public required string PeriodStartColumn { get; init; }
+
+    public required string PeriodEndColumn { get; init; }
+
+    /// <summary>
+    /// Whether the entity has owned references. Their changes are tracked on entries of their own, so the
+    /// owner's entry must be found for them (DESIGN.md D9).
+    /// </summary>
+    public required bool HasOwnedReferences { get; init; }
+
+    /// <summary>The cached plan, or <see langword="null"/> when the model has no history entity type for it.</summary>
+    public static TemporalWritePlan? For(IEntityType entityType)
+    {
+        if (entityType[HindsightAnnotationNames.HistoryEntityType] is not string historyTypeName
+            || entityType.Model.FindEntityType(historyTypeName) is not { } historyType)
+        {
+            return null;
+        }
+
+        return entityType.GetOrAddRuntimeAnnotationValue(
+            HindsightAnnotationNames.WritePlan,
+            static state => Build(state.EntityType, state.HistoryType),
+            (EntityType: entityType, HistoryType: historyType));
+    }
+
+    private static TemporalWritePlan Build(IEntityType entityType, IEntityType historyType)
+    {
+        var keyColumns = new List<string>();
+        foreach (var keyProperty in entityType.FindPrimaryKey()!.Properties)
+        {
+            if (keyProperty.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
+            {
+                keyColumns.Add(column);
+            }
+        }
+
+        return new TemporalWritePlan
+        {
+            HistoryEntityType = historyType,
+            Columns = VersionedColumns.Collect(entityType)
+                .Where(column => historyType.FindProperty(column.Column) is not null)
+                .ToList(),
+            KeyColumns = keyColumns,
+            PeriodStartColumn = (string?)entityType[HindsightAnnotationNames.PeriodStartColumnName]
+                ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName,
+            PeriodEndColumn = (string?)entityType[HindsightAnnotationNames.PeriodEndColumnName]
+                ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName,
+            HasOwnedReferences = VersionedColumns.HasOwnedReferences(entityType),
+        };
+    }
+}
+
+/// <summary>
 /// Builds the list of <see cref="PendingHistoryRow"/> from a context's change tracker. Pure: reads
 /// metadata and tracked values, performs no I/O. A <c>Deleted</c> row's values are only a placeholder
 /// at this point — see <see cref="DeletedRowSnapshotReader"/>, which must run before any row this
@@ -76,9 +144,6 @@ internal static class HistoryRowPlan
 {
     public static IReadOnlyList<PendingHistoryRow> BuildPending(DbContext context)
     {
-        List<PendingHistoryRow>? rows = null;
-        var model = context.Model;
-
         // HistorySnapshotGuardInterceptor.Guard runs first on SaveChanges (registered before this
         // writer in HindsightOptionsExtension) and already walked ChangeTracker.Entries() once. With
         // AutoDetectChangesEnabled on — the default — that call already ran the one DetectChanges()
@@ -95,55 +160,21 @@ internal static class HistoryRowPlan
         tracker.AutoDetectChangesEnabled = false;
         try
         {
-            foreach (var entry in tracker.Entries())
+            var changes = TemporalChanges.Collect(tracker);
+            if (changes.Count == 0)
             {
-                if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is not true)
+                return [];
+            }
+
+            var rows = new List<PendingHistoryRow>(changes.Count);
+            foreach (var (entry, state) in changes)
+            {
+                if (TemporalWritePlan.For(entry.Metadata) is not { } plan)
                 {
                     continue;
                 }
 
-                if (entry.State is not (EntityState.Added or EntityState.Modified or EntityState.Deleted))
-                {
-                    continue;
-                }
-
-                if (entry.Metadata[HindsightAnnotationNames.HistoryEntityType] is not string historyTypeName
-                    || model.FindEntityType(historyTypeName) is not { } historyType)
-                {
-                    continue;
-                }
-
-                if (entry.State == EntityState.Modified && !HasVersionedModification(entry))
-                {
-                    // DESIGN.md D5 / configuration.md: a SaveChanges that touched only excluded
-                    // properties writes no history row.
-                    continue;
-                }
-
-                var versionedColumns = new List<KeyValuePair<string, string>>();
-                foreach (var property in entry.Metadata.GetProperties())
-                {
-                    if (property.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is true)
-                    {
-                        continue;
-                    }
-
-                    if (property.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
-                    {
-                        versionedColumns.Add(new KeyValuePair<string, string>(column, property.Name));
-                    }
-                }
-
-                var keyColumns = new List<string>();
-                foreach (var keyProperty in entry.Metadata.FindPrimaryKey()!.Properties)
-                {
-                    if (keyProperty.GetColumnName() is { } column && historyType.FindProperty(column) is not null)
-                    {
-                        keyColumns.Add(column);
-                    }
-                }
-
-                if (keyColumns.Count == 0)
+                if (plan.KeyColumns.Count == 0)
                 {
                     // HistoryEntityTypeConvention.ValidateTemporalEntityType rejects a temporal entity whose
                     // entire primary key is Exclude()-d at model build time, so that specific cause can no
@@ -157,19 +188,17 @@ internal static class HistoryRowPlan
 
                 var row = new PendingHistoryRow
                 {
-                    HistoryEntityType = historyType,
-                    State = entry.State,
-                    Entry = entry.State == EntityState.Deleted ? null : entry,
+                    HistoryEntityType = plan.HistoryEntityType,
+                    State = state,
+                    Entry = state == EntityState.Deleted ? null : entry,
                     SourceEntityType = entry.Metadata,
-                    VersionedColumns = versionedColumns,
-                    KeyColumns = keyColumns,
-                    PeriodStartColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodStartColumnName]
-                        ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodStartColumnName,
-                    PeriodEndColumn = (string?)entry.Metadata[HindsightAnnotationNames.PeriodEndColumnName]
-                        ?? TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName,
+                    VersionedColumns = plan.Columns,
+                    KeyColumns = plan.KeyColumns,
+                    PeriodStartColumn = plan.PeriodStartColumn,
+                    PeriodEndColumn = plan.PeriodEndColumn,
                 };
 
-                if (entry.State == EntityState.Deleted)
+                if (state == EntityState.Deleted)
                 {
                     // Placeholder only. EntityEntry.OriginalValues is the entity's real last-known state
                     // when it was loaded by a query, but for a "delete by id" that never loaded the entity
@@ -178,25 +207,26 @@ internal static class HistoryRowPlan
                     // reliably distinguishable from here. What's written here is only good enough to carry
                     // the (always-trustworthy, since the caller had to set it to identify the row) primary
                     // key through to DeletedRowSnapshotReader, which unconditionally overwrites every
-                    // versioned column — key columns included — with the row's real values read fresh from
-                    // the source table before the delete. Never write history rows from this loop's output
-                    // without that step running first.
-                    var original = entry.OriginalValues;
-                    foreach (var (column, propertyName) in row.VersionedColumns)
+                    // versioned column — key columns and nested members included — with the row's real
+                    // values read fresh from the source table before the delete. Never write history rows
+                    // from this loop's output without that step running first.
+                    foreach (var column in row.VersionedColumns)
                     {
-                        row.Values[column] = original[propertyName];
+                        row.Values[column.Column] = column.IsNested
+                            ? null
+                            : entry.OriginalValues[(IProperty)column.Property];
                     }
                 }
 
-                (rows ??= []).Add(row);
+                rows.Add(row);
             }
+
+            return rows;
         }
         finally
         {
             tracker.AutoDetectChangesEnabled = autoDetectChangesEnabled;
         }
-
-        return rows ?? [];
     }
 
     /// <summary>
@@ -212,25 +242,43 @@ internal static class HistoryRowPlan
                 continue;
             }
 
-            var current = entry.CurrentValues;
-            foreach (var (column, propertyName) in row.VersionedColumns)
+            foreach (var column in row.VersionedColumns)
             {
-                row.Values[column] = current[propertyName];
+                row.Values[column.Column] = ReadCurrentValue(entry, column);
             }
         }
     }
 
-    private static bool HasVersionedModification(EntityEntry entry)
+    // A nested column is read off the entry that holds it: the owner's own entry for its complex
+    // properties (EF tracks them there), the owned reference's entry for an owned member. A missing owned
+    // reference (set to null, or never set) has no entry, and a null optional complex property has no
+    // value: both contribute NULL columns — exactly what the main table holds for them.
+    private static object? ReadCurrentValue(EntityEntry entry, VersionedColumn column)
     {
-        foreach (var property in entry.Properties)
+        var holder = entry;
+        ComplexPropertyEntry? complex = null;
+        foreach (var member in column.Path)
         {
-            if (property.IsModified
-                && property.Metadata.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is not true)
+            if (member is INavigation navigation)
             {
-                return true;
+                holder = holder.Reference(navigation).TargetEntry;
+                complex = null;
+                if (holder is null)
+                {
+                    return null;
+                }
+            }
+            else
+            {
+                var complexProperty = (IComplexProperty)member;
+                complex = complex is null ? holder.ComplexProperty(complexProperty) : complex.ComplexProperty(complexProperty);
+                if (complex.CurrentValue is null)
+                {
+                    return null;
+                }
             }
         }
 
-        return false;
+        return holder.CurrentValues[(IProperty)column.Property];
     }
 }

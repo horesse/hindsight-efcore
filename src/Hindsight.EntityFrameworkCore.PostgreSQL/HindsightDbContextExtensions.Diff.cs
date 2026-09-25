@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace Hindsight;
 
@@ -143,21 +144,21 @@ public static partial class HindsightDbContextExtensions
         }
 
         List<PropertyChange>? changes = null;
-        foreach (var property in plan.Properties)
+        foreach (var column in plan.Columns)
         {
-            var getter = property.GetGetter();
-            var newValue = getter.GetClrValueUsingContainingEntity(newer);
+            var property = (IProperty)column.Property;
+            var newValue = VersionDiffPlan.Read(newer, column);
 
             if (older is null)
             {
-                (changes ??= []).Add(new PropertyChange(property, oldValue: null, newValue));
+                (changes ??= []).Add(new PropertyChange(property, column.DisplayName, oldValue: null, newValue));
                 continue;
             }
 
-            var oldValue = getter.GetClrValueUsingContainingEntity(older);
+            var oldValue = VersionDiffPlan.Read(older, column);
             if (!property.GetValueComparer().Equals(oldValue, newValue))
             {
-                (changes ??= []).Add(new PropertyChange(property, oldValue, newValue));
+                (changes ??= []).Add(new PropertyChange(property, column.DisplayName, oldValue, newValue));
             }
         }
 

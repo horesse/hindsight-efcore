@@ -51,6 +51,7 @@ LINQ.
 
 ## Standalone entities only
 
-Entities in an inheritance hierarchy, or with owned or complex members, cannot be temporal (see
-[Model validation](/configuration/model-validation)); a historical query on one throws
-`NotSupportedException`. Read the history table with `FromSql` if you have to.
+Entities in an inheritance hierarchy, or with owned collections or JSON-mapped members, cannot be
+temporal (see [Model validation](/configuration/model-validation)); a historical query on one throws
+`NotSupportedException`. Read the history table with `FromSql` if you have to. Table-split complex
+properties and owned references are [versioned and rebuilt](/configuration/nested-members#reading-it-back).

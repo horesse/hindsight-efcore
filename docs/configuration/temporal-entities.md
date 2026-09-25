@@ -17,7 +17,7 @@ The next `dotnet ef migrations add` creates its history table. See
 |---|---|
 | history table | `<main table>_history`, in the main table's schema |
 | period columns | `valid_from`, `valid_to` |
-| versioned properties | every mapped property of the entity |
+| versioned properties | every mapped property of the entity, including the properties of its [complex and owned members](/configuration/nested-members) |
 
 ## Customizing
 
@@ -49,6 +49,8 @@ least one key column to tell which history rows belong to which entity.
 
 ## What can be temporal
 
-A temporal entity must be a standalone entity type mapped to its own table, with a primary key. Owned
-references, complex properties and inheritance hierarchies are rejected when the model is built. See
-[Model validation](/configuration/model-validation) for the full list and what to do instead.
+A temporal entity must be a standalone entity type mapped to its own table, with a primary key. It can
+have [complex properties and owned references](/configuration/nested-members) stored in that table;
+their columns are versioned too. Owned collections, JSON-mapped members and inheritance hierarchies are
+rejected when the model is built. See [Model validation](/configuration/model-validation) for the full
+list and what to do instead.

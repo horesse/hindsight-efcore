@@ -112,11 +112,11 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public async Task Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table()
+    public async Task Temporal_entity_with_an_owned_collection_fails_model_building_instead_of_creating_a_broken_history_table()
     {
         var ct = TestContext.Current.CancellationToken;
         var cs = await postgres.CreateDatabaseAsync(
-            nameof(Temporal_entity_with_an_owned_reference_fails_model_building_instead_of_creating_a_broken_history_table),
+            nameof(Temporal_entity_with_an_owned_collection_fails_model_building_instead_of_creating_a_broken_history_table),
             ct);
 
         var options = new DbContextOptionsBuilder<PolicyWithOwnedAddressContext>()
@@ -234,7 +234,7 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
     {
         public int Id { get; set; }
         public string Number { get; set; } = "";
-        public OwnedAddress BillingAddress { get; set; } = new();
+        public List<OwnedAddress> BillingAddresses { get; } = [];
     }
 
     private sealed class OwnedAddress
@@ -252,7 +252,7 @@ public sealed class HistoryTableCreationTests(PostgresFixture postgres)
         {
             var policy = modelBuilder.Entity<PolicyWithOwnedAddress>();
             policy.ToTable("policies");
-            policy.OwnsOne(p => p.BillingAddress);
+            policy.OwnsMany(p => p.BillingAddresses);
             policy.IsTemporal();
         }
     }

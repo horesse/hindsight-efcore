@@ -241,7 +241,7 @@ internal static class HistoryRowWriter
             var versionedBindings = new List<ColumnBinding>(row.VersionedColumns.Count);
 
             var index = 0;
-            foreach (var (column, _) in row.VersionedColumns)
+            foreach (var column in row.VersionedColumns.Select(versioned => versioned.Column))
             {
                 var name = sqlHelper.GenerateParameterName("p" + index++);
                 columns.Add(sqlHelper.DelimitIdentifier(column));

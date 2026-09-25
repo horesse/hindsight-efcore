@@ -12,7 +12,7 @@ transaction `SaveChanges` runs in:
 | with no transaction | opens one around the save and commits it¹ |
 | inside a transaction you began | writes history in your transaction; you commit |
 | inside an ambient `TransactionScope` | opens none; the scope commits or rolls back |
-| with `EnableRetryOnFailure()` and no transaction | throws `InvalidOperationException`; see below |
+| with `EnableRetryOnFailure()` and no transaction | trigger writer: lets EF Core open one per attempt; interceptor writer: throws `InvalidOperationException`. See below |
 
 ¹ The trigger writer only needs its own transaction to push a [change context](/writing/change-context).
 Without a provider or `WithReason`, it opens none: the trigger writes history inside the same
@@ -27,14 +27,21 @@ Begin a transaction before `SaveChanges` and Hindsight uses it:
 ## `EnableRetryOnFailure` {#enableretryonfailure}
 
 A retrying execution strategy can re-run a whole `SaveChanges` after a transient failure. A transaction
-opened *inside* that call would not survive the retry, so EF Core refuses it, and Hindsight fails
-early with a clear message instead:
+opened *inside* that call would not survive the retry, so EF Core refuses it. Aspire turns the strategy
+on by default.
+
+The [trigger writer](/writing/history-writers) needs no transaction of its own here. It asks EF Core to
+open one inside the execution strategy, and pushes the [change context](/writing/change-context) into
+it. A retried attempt runs in a new transaction and gets the context again, so a plain `SaveChanges`
+just works:
 
 <<< @/snippets/Transactions.cs#retry-options
 
-A save that makes Hindsight open its own transaction then throws `InvalidOperationException`, naming
-the conflict and the fix. The fix is the pattern EF Core recommends for any transaction under retry:
-run the unit of work through the execution strategy and open the transaction yourself.
+The interceptor writer writes history rows after EF Core's own batch, outside the execution strategy,
+so a retry could not repeat them. A save that would make it open its own transaction throws
+`InvalidOperationException` instead, naming the conflict and the fix. The fix, which also works under
+the trigger writer, is the pattern EF Core recommends for any transaction under retry: run the unit of
+work through the execution strategy and open the transaction yourself.
 
 <<< @/snippets/Transactions.cs#retry-execution-strategy
 

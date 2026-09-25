@@ -47,6 +47,8 @@ Each of these fails loudly, so you find out during development rather than from 
   retry succeeds and reuses that id. With `GENERATED ALWAYS AS IDENTITY`
   (`UseIdentityAlwaysColumn()`) PostgreSQL rejects it with error `428C9` until you reset the key
   property to `0`.
+- **`EnableRetryOnFailure()` needs your own transaction** around a save that Hindsight would otherwise
+  wrap in one. The trigger writer does not. See [Transactions](/writing/transactions#enableretryonfailure).
 
 ### Both writers
 
@@ -57,8 +59,6 @@ Each of these fails loudly, so you find out during development rather than from 
   [Choosing a history writer](/writing/history-writers#differences-you-can-observe).
 - **The change context is asserted by the application**, not guaranteed by the database. See the
   [trust model](/writing/change-context#trust-model).
-- **`EnableRetryOnFailure()` needs your own transaction** around a save that Hindsight would otherwise
-  wrap in one. See [Transactions](/writing/transactions#enableretryonfailure).
 - **Pooled and factory-created contexts need a singleton change-context provider.** See
   [Change context](/writing/change-context#pooled-and-factory-created-contexts).
 

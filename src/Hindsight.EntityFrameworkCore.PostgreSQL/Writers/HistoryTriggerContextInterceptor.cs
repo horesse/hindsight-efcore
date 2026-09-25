@@ -30,19 +30,29 @@ namespace Hindsight.Writers;
 /// the ambient scope's job, not this interceptor's, and <c>SavedChanges</c>/<c>SaveChangesFailed</c>
 /// only close the connection back down again. Bulk operations (<c>ExecuteUpdate</c>/<c>ExecuteDelete</c>)
 /// do not pass through here: the trigger still records their history, with <see langword="null"/>
-/// context columns (DESIGN.md D4). A configured retrying execution strategy makes opening a new EF
-/// transaction unsafe — see <see cref="HistoryWriterTransaction"/> — but only once there is actually a
+/// context columns (DESIGN.md D4). A configured retrying execution strategy makes opening a transaction
+/// here unsafe (it would not survive a retry), so with one and no caller transaction this interceptor
+/// opens none: it runs the save with <see cref="AutoTransactionBehavior.Always"/>, EF Core opens its own
+/// transaction inside the execution strategy on every attempt, and <see cref="TransactionStarted"/>
+/// pushes the context into each. All of this only once there is actually a
 /// context to push (<see cref="Capture"/> returns <see langword="null"/>, and no transaction is touched,
 /// when neither a change context provider nor <see cref="ChangeReasonScope"/> is in use — and, for that
 /// optimization to be safe, only when this <c>SaveChanges</c> is not running inside a transaction the
 /// caller already opened itself, since a previous <c>SaveChanges</c> in that same transaction may have
 /// left a stale <c>set_config</c> value behind for this one to otherwise inherit).
 /// </remarks>
-internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
+internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor, IDbTransactionInterceptor
 {
     // Keyed by the context instance, like HistoryWriterInterceptor: at most one live entry per context,
     // removed in the terminal hook. Never a field — the interceptor is shared between contexts.
     private readonly ConditionalWeakTable<DbContext, OwnedTransaction> _pending = new();
+
+    // A retrying execution strategy (EnableRetryOnFailure) with no caller transaction: a transaction
+    // opened here would not survive a retry, so none is. Instead this SaveChanges runs with
+    // AutoTransactionBehavior.Always, which makes EF Core open its own transaction *inside* the
+    // execution strategy — a fresh one on every attempt — and TransactionStarted pushes the context into
+    // each of them. Removed, and the behavior restored, in the terminal hook.
+    private readonly ConditionalWeakTable<DbContext, RetriablePush> _retriable = new();
 
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData, InterceptionResult<int> result)
@@ -68,8 +78,52 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         return await base.SavingChangesAsync(eventData, result, cancellationToken);
     }
 
+    public DbTransaction TransactionStarted(
+        DbConnection connection, TransactionEndEventData eventData, DbTransaction result)
+    {
+        if (eventData.Context is { } context && _retriable.TryGetValue(context, out var push))
+        {
+            using var command = connection.CreateCommand();
+            command.Transaction = result;
+            Bind(command, push.Values);
+            command.ExecuteNonQuery();
+        }
+
+        return result;
+    }
+
+    public async ValueTask<DbTransaction> TransactionStartedAsync(
+        DbConnection connection,
+        TransactionEndEventData eventData,
+        DbTransaction result,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventData.Context is { } context && _retriable.TryGetValue(context, out var push))
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = result;
+            Bind(command, push.Values);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        return result;
+    }
+
+    public override void SaveChangesCanceled(DbContextEventData eventData)
+    {
+        EndRetriable(eventData.Context);
+        base.SaveChangesCanceled(eventData);
+    }
+
+    public override Task SaveChangesCanceledAsync(DbContextEventData eventData, CancellationToken cancellationToken = default)
+    {
+        EndRetriable(eventData.Context);
+        return base.SaveChangesCanceledAsync(eventData, cancellationToken);
+    }
+
     public override int SavedChanges(SaveChangesCompletedEventData eventData, int result)
     {
+        EndRetriable(eventData.Context);
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
@@ -84,6 +138,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
     public override async ValueTask<int> SavedChangesAsync(
         SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
     {
+        EndRetriable(eventData.Context);
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
@@ -101,6 +156,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 
     public override void SaveChangesFailed(DbContextErrorEventData eventData)
     {
+        EndRetriable(eventData.Context);
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
@@ -115,6 +171,7 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
     public override async Task SaveChangesFailedAsync(
         DbContextErrorEventData eventData, CancellationToken cancellationToken = default)
     {
+        EndRetriable(eventData.Context);
         if (eventData.Context is { } context && _pending.TryGetValue(context, out var owned))
         {
             _pending.Remove(context);
@@ -137,9 +194,15 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
     private void Push(DbContext context)
     {
         _pending.Remove(context);
+        EndRetriable(context);
 
         var values = Capture(context);
         if (values is null)
+        {
+            return;
+        }
+
+        if (DeferToExecutionStrategy(context, values))
         {
             return;
         }
@@ -171,9 +234,15 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
     private async Task PushAsync(DbContext context, CancellationToken cancellationToken)
     {
         _pending.Remove(context);
+        EndRetriable(context);
 
         var values = Capture(context);
         if (values is null)
+        {
+            return;
+        }
+
+        if (DeferToExecutionStrategy(context, values))
         {
             return;
         }
@@ -305,5 +374,36 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         command.CommandText = "SELECT " + string.Join(", ", calls);
     }
 
+    // See _retriable. Only when the caller has no transaction of any kind (theirs is used otherwise, and a
+    // retrying strategy refuses an ambient TransactionScope on its own) and has not turned automatic
+    // transactions off: under AutoTransactionBehavior.Never EF Core bypasses the execution strategy, so
+    // the ordinary path below applies.
+    private bool DeferToExecutionStrategy(DbContext context, List<KeyValuePair<string, string>> values)
+    {
+        var database = context.Database;
+        if (database.CurrentTransaction is not null
+            || System.Transactions.Transaction.Current is not null
+            || database.AutoTransactionBehavior == AutoTransactionBehavior.Never
+            || !database.CreateExecutionStrategy().RetriesOnFailure)
+        {
+            return false;
+        }
+
+        _retriable.Add(context, new RetriablePush(values, database.AutoTransactionBehavior));
+        database.AutoTransactionBehavior = AutoTransactionBehavior.Always;
+        return true;
+    }
+
+    private void EndRetriable(DbContext? context)
+    {
+        if (context is not null && _retriable.TryGetValue(context, out var push))
+        {
+            _retriable.Remove(context);
+            context.Database.AutoTransactionBehavior = push.PreviousBehavior;
+        }
+    }
+
     private sealed record OwnedTransaction(HistoryWriterTransaction.Outcome TransactionOutcome);
+
+    private sealed record RetriablePush(List<KeyValuePair<string, string>> Values, AutoTransactionBehavior PreviousBehavior);
 }

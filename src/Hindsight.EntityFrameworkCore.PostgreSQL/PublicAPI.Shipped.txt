@@ -19,10 +19,6 @@ Hindsight.ChangeContext.Extra.get -> string?
 Hindsight.ChangeContext.Extra.init -> void
 Hindsight.ChangeContext.Reason.get -> string?
 Hindsight.ChangeContext.Reason.init -> void
-Hindsight.ChangeContext.UserId.get -> string?
-Hindsight.ChangeContext.UserId.init -> void
-Hindsight.ChangeContext.UserName.get -> string?
-Hindsight.ChangeContext.UserName.init -> void
 Hindsight.HindsightAnnotationNames
 Hindsight.HindsightDbContextExtensions
 Hindsight.HindsightDbContextOptionsExtensions
@@ -85,3 +81,20 @@ const Hindsight.HindsightAnnotationNames.HasDbSessionUser = "Hindsight:HasDbSess
 Hindsight.TemporalEntityTypeBuilder<TEntity>.WithDbSessionUser() -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
 Hindsight.Version<TEntity>.DbSessionUser.get -> string?
 Hindsight.Version<TEntity>.DbSessionUser.init -> void
+Hindsight.PropertyChange
+Hindsight.PropertyChange.NewValue.get -> object?
+Hindsight.PropertyChange.OldValue.get -> object?
+Hindsight.PropertyChange.Path.get -> string!
+Hindsight.PropertyChange.Property.get -> Microsoft.EntityFrameworkCore.Metadata.IProperty!
+static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, Hindsight.Version<TEntity!>? older, Hindsight.Version<TEntity!>! newer) -> System.Collections.Generic.IReadOnlyList<Hindsight.PropertyChange!>!
+static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, TEntity? older, TEntity! newer) -> System.Collections.Generic.IReadOnlyList<Hindsight.PropertyChange!>!
+static Hindsight.HindsightQueryableExtensions.ContainedIn<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!
+static Hindsight.HindsightQueryableExtensions.FromTo<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!
+Hindsight.ChangeContext.ChangedBy.get -> string?
+Hindsight.ChangeContext.ChangedBy.init -> void
+Hindsight.ChangeContext.ChangedByName.get -> string?
+Hindsight.ChangeContext.ChangedByName.init -> void
+Hindsight.TemporalEntityTypeBuilder<TEntity>.WithRetention() -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+const Hindsight.HindsightAnnotationNames.HasRetention = "Hindsight:HasRetention" -> string!
+static Hindsight.HindsightDbContextExtensions.GetHistoryHorizonAsync<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.DateTimeOffset?>!
+static Hindsight.HindsightDbContextExtensions.PruneHistoryAsync<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, System.DateTimeOffset olderThan, int batchSize = 10000, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!

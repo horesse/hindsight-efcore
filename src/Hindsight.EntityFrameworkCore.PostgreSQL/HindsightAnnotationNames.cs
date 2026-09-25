@@ -37,6 +37,14 @@ public static class HindsightAnnotationNames
     public const string HasDbSessionUser = Prefix + "HasDbSessionUser";
 
     /// <summary>
+    /// Opts an entity type into history retention (DESIGN.md D19): <c>PruneHistoryAsync</c> may remove
+    /// its closed versions, and a historical query that reaches before the recorded retention horizon
+    /// throws instead of answering from incomplete history. Set by
+    /// <see cref="TemporalEntityTypeBuilder{TEntity}.WithRetention"/>. Value: <see langword="true"/>.
+    /// </summary>
+    public const string HasRetention = Prefix + "HasRetention";
+
+    /// <summary>
     /// On a temporal entity type: the shared-type name of its generated history entity type.
     /// Written by the model-finalizing convention. Value: <see cref="string"/>.
     /// </summary>
@@ -71,6 +79,13 @@ public static class HindsightAnnotationNames
     /// <see langword="true"/>.
     /// </summary>
     internal const string OrphanedTriggerPending = Prefix + "OrphanedTriggerPending";
+
+    /// <summary>
+    /// Marks the generated entity type that maps the retention-horizon table (DESIGN.md D19): one row
+    /// per history entity whose history was pruned, holding the instant before which that history is
+    /// incomplete. Value: <see langword="true"/>.
+    /// </summary>
+    internal const string IsRetentionHorizonTable = Prefix + "IsRetentionHorizonTable";
 
     /// <summary>
     /// Runtime annotation on a temporal entity type: its cached <c>VersionDiffPlan</c> — the versioned

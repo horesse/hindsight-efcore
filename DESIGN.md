@@ -1149,6 +1149,135 @@ non-UTC offsets, tombstone exclusion for both operators, composition with `Where
 `EXPLAIN` test, each guard, and a Verify SQL snapshot per operator) and `TimeRangeOperatorTests`
 (unit: argument validation and the `tstzrange` mapping).
 
+## D19. History retention and partitioning — resolved by spike, 2026-09-25
+
+History grew without bound. Two needs: **retention** (remove history older than a cutoff) and
+**partitioning** (split a large history table so retention is cheap and queries skip old data). Hard
+constraints: nothing is deleted by a migration (golden rule 3); a query must never answer from history
+that was removed as if it were complete (golden rule 2); the open version is never removed; no
+`*.Internal` (golden rule 1); additive to 1.x.
+
+**Retention is an explicit runtime call, `db.PruneHistoryAsync<T>(olderThan, batchSize, ct)`.** It
+deletes the rows whose period *ended* at or before the cutoff — `valid_to <= cutoff`: closed versions
+and delete tombstones. The open version (`valid_to = 'infinity'`, D5) never qualifies, so the predicate
+itself protects it; `DateTimeOffset.MaxValue` (`<= 'infinity'` would match everything) and a cutoff after
+the database's `now()` (history still being written; the horizon would make `AsOf(now)` throw) are
+rejected with `ArgumentOutOfRangeException`. Why `AsOf(t)` stays exact for every `t >= cutoff`: any
+version valid at `t` has `valid_to > t >= cutoff`, so it is kept — under both writers, including the
+D3 clamp, since only `valid_to` is compared. Not an `ExecuteDelete` over `History<T>()`: D7 rejects
+bulk operations on historical queries, and that shape could not guarantee the open version survives.
+Tombstones go with everything else: an entity deleted before the cutoff leaves no history at all, which
+is the correct answer for every instant at or after the horizon, and the only choice that keeps deleted
+entities from accumulating forever. The delete is written on `tstzrange(valid_from, valid_to) <@
+tstzrange('-infinity', @cutoff) AND valid_to <= @cutoff`, so the D14 GiST index finds the candidates
+(the `<@` alone would also match every empty tombstone range; the second test narrows it).
+
+**The retention horizon, and why queries before it throw.** Without a record of the cutoff, `AsOf(t)`
+before it would silently answer "did not exist" for pruned entities. Decided shape:
+
+- **Opt-in per entity**, `IsTemporal(t => t.WithRetention())` (`HindsightAnnotationNames.HasRetention`).
+  `PruneHistoryAsync` on an entity without it throws `InvalidOperationException`. Opt-in because the
+  guard costs a function call per historical query and needs `CREATE FUNCTION`; everyone else sees no
+  migration diff from upgrading Hindsight.
+- **A metadata table in the EF model**, `hindsight_retention_horizon (history_entity text PK, horizon
+  timestamptz NOT NULL)`, a property-bag entity type (`Hindsight#RetentionHorizon`, tagged
+  `IsRetentionHorizonTable`) the convention adds once any entity opts in, so the differ creates it in the
+  next migration with no raw DDL. Keyed by the history entity's *identity* (D15), which survives table
+  renames. Kept in the model once a snapshot has it, even after no entity uses retention any more (never
+  dropped, like D6's orphans). No schema of its own: it follows the model's default schema like every
+  other table, and a default-schema change moves it with an ordinary `RenameTableOperation`.
+- **A guard function**, `hindsight_history_retained(history_entity text, at timestamptz) RETURNS boolean`
+  (plpgsql, `STABLE PARALLEL SAFE`), emitted by the D13 decorator right after the table's
+  `CreateTableOperation`, and dropped and recreated when the table changes schema (a function is a
+  standalone object that `SET SCHEMA` leaves behind). It raises SQLSTATE `HS001` when `at` is before the
+  horizon. The rewriter (D12/D18) adds `AND hindsight_history_retained('<identity>', @t)` to `AsOf` (with
+  `@t`) and to `FromTo` / `ContainedIn` (with `@from`: any window starting before the horizon may have lost
+  versions) for entities with `WithRetention()`. The call has no column argument, so PostgreSQL plans it
+  as a **one-time filter**, evaluated once before the scan whether or not any row matches (spike, PG 14
+  and 17: `EXPLAIN` shows `One-Time Filter`; `AsOf(t).Where(id == missing)` still raises). If a plan never
+  executes the guarded scan at all — a join whose other side is empty, a `LIMIT` satisfied by an earlier
+  `Concat` branch — the historical rows could not have changed the answer either, so no wrong result is
+  possible. Mapped as a DbFunction (`RetentionGuardFunction`, registered at model initialization like
+  D18's `tstzrange`, so the relational type-mapping conventions see it); no `FromSql`, no internals.
+- **The error is a `PostgresException` with `SqlState == "HS001"`, not an `InvalidOperationException`.**
+  The spike tried wrapping it in an `IDbCommandInterceptor.CommandFailed` override: that works when the
+  error arrives with the command, but when it arrives while EF is already reading rows (the second branch
+  of a `Concat`), EF raises it from `DbDataReader.Read` and calls no interceptor, so users would get either
+  type depending on the plan. One predictable type beats a nicer one some of the time; the message names
+  the history entity, the horizon and the instant, and the SQLSTATE is documented.
+- **Rejected alternatives:** caching the horizon in .NET (another instance's prune makes the cache stale,
+  and stale means wrong); a `COMMENT` on the history table (user tooling overwrites comments); a cast-error
+  trick without a function (unreadable error); a marker row in the history table (every reader would have
+  to filter it out).
+- **Removing `WithRetention()` once a snapshot has it throws** at model build (like removing a key
+  property, D6): history may already be pruned, and without the guard `AsOf` before the horizon would
+  silently answer from what is left.
+- **`AllVersions()` / `History<T>()` are not guarded**: they have no instant to check, and throwing on
+  every pruned table would make them useless there. They return the retained history, whose first version
+  may be an update; `GetHistoryHorizonAsync<T>()` returns the horizon (`null` if never pruned) so a caller
+  can tell. Documented as a known trade-off.
+
+**Order of operations instead of one transaction.** The horizon is recorded first —
+`INSERT … ON CONFLICT DO UPDATE SET horizon = GREATEST(old, new)`, so it only moves forward, `WHERE
+@cutoff <= now()` — as its own statement, and only then are rows deleted, in batches of `batchSize`
+(`DELETE … WHERE history_id IN (SELECT … LIMIT n)`), each its own transaction. One transaction over
+millions of rows would mean long lock waits and bloat; with the horizon committed first, a failure
+part-way leaves only rows no guarded query can reach, and the next call deletes them. Inside a caller's
+transaction every statement joins it and everything rolls back together (that is also how a partition
+detach and the horizon are made atomic, below).
+
+**Partitioning is documented SQL, not generated DDL — key `valid_to`.**
+
+- **`valid_to`, not `valid_from`.** With `valid_from`, dropping an old partition would drop the open
+  version of an entity created long ago and never updated; retention would still need row deletes, and
+  `AsOf(now)` would prune nothing (`valid_from <= t` only excludes future partitions). With `valid_to`,
+  every open version sits in a `FROM ('infinity') TO (MAXVALUE)` partition, dropping a partition wholly
+  below the cutoff can never take an open version, and `valid_to > @t` prunes every partition that ended
+  before `t` (spike: plan-time pruning with Npgsql's bound parameters, `Subplans Removed` for a generic
+  plan).
+- **Row movement.** Closing a version moves its row out of the current partition (PostgreSQL does it as
+  delete + insert: one extra row write per update, no HOT). Both writers close a version only under the
+  row lock on the *main* table (D3), so two transactions never race to move the same history row; the
+  concurrent-update test passes unchanged on a partitioned table under both writers.
+- **Keys and indexes.** A partitioned table's primary key must include the partition key:
+  `(history_id, valid_to)`. It stays a surrogate key, so CLAUDE.md's "no unique index on a history table"
+  (about entity columns) is not crossed. Identity columns on a partitioned parent work from PostgreSQL 14
+  (spike). The D5 version index and the D14 GiST expression index both work as partitioned indexes. The
+  D13 trigger and the Interceptor's close-and-insert CTE work unchanged: an `INSERT` into the parent is
+  routed, and plpgsql re-resolves the table name after the swap.
+- **Why not generated.** EF Core migrations cannot express `PARTITION BY` (it would mean rewriting the
+  inner generator's `CREATE TABLE` text), new monthly partitions are a runtime job rather than a
+  migration, and converting an existing table is a data migration (golden rule 3). So
+  `docs/snippets/PartitionHistory.sql` is the procedure: rename the old table and its indexes aside,
+  `CREATE TABLE … (LIKE … INCLUDING DEFAULTS INCLUDING IDENTITY) PARTITION BY RANGE (valid_to)`, a current
+  partition, monthly partitions, a `DEFAULT` partition as a safety net, the key and both indexes under
+  Hindsight's names, `INSERT … OVERRIDING SYSTEM VALUE`, `setval`. The old table is kept. The integration
+  test executes that file verbatim, so the page and the test cannot drift. Retention on a partitioned
+  table is `DETACH PARTITION` plus `PruneHistoryAsync(partition upper bound)` in one transaction (the
+  horizon and the detach commit together), then `DROP TABLE`.
+- **Known gap:** EF renames a primary key by dropping and re-adding it on `history_id` alone, which fails
+  loudly on a partitioned table, so renaming a partitioned history table (D15) needs a hand-edited
+  migration. Documented.
+
+Covered by `HistoryRetentionTests` (Testcontainers, both writers: `AsOf` identical before and after
+pruning at every boundary ± 1 µs from the cutoff on; the open version never pruned; a deleted entity
+gone; retained `AllVersions`/`History<T>`; writes after pruning contiguous; `AsOf`/`FromTo`/`ContainedIn`
+before the horizon raise `HS001` even with no matching row and inside a `Concat`; no horizon before any
+prune; horizon monotonic; per-entity; argument and configuration errors; batching; rollback in a caller
+transaction; the delete can use the GiST index; a default-schema move keeps the horizon and the guard
+working; Verify snapshots of the DDL and of the guarded `AsOf` SQL), `PartitionedHistoryTests`
+(PostgreSQL 14 and 17: the documented conversion keeps every row, both writers keep writing, open
+versions live in the current partition, both indexes on the parent, `EXPLAIN` of `AsOf` skips old
+partitions, detach + prune in one transaction, concurrent updates stay contiguous) and
+`RetentionModelTests` (unit: the table appears only with `WithRetention()`, adding it creates only that
+table, removing it throws, the table survives the entity leaving the model, a default-schema move emits
+the function's drop and re-create in order).
+
+Revisit if: users need a generated partitioned table (then an annotation such as
+`PartitionHistoryByValidTo()` and a decorator rewrite of the history `CREATE TABLE`); `AllVersions()` /
+`History<T>()` need to signal truncation in-band; or EF Core gains an interception point for reader
+errors, which would allow an `InvalidOperationException` consistently.
+
 ## Open questions (resolve in the spike, then move up)
 
 ### Should `HistoryWriter.Trigger` become the default in v2.0? — opened 2026-09-12

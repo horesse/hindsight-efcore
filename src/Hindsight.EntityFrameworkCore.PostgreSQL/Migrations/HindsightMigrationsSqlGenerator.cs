@@ -21,7 +21,9 @@ namespace Hindsight.Migrations;
 /// <c>CreateTableOperation</c> (after the trigger, when one is also emitted), an
 /// <c>INSERT INTO ... SELECT ...</c> that seeds an initial history version for every row already in the
 /// main table — unconditionally, in both writer modes (DESIGN.md D6, "Existing non-empty table made
-/// temporal"; <see cref="HistorySeedSqlGenerator"/>).
+/// temporal"; <see cref="HistorySeedSqlGenerator"/>). When the model has the retention-horizon table
+/// (DESIGN.md D19), it appends the <c>hindsight_history_retained</c> guard function after that table's
+/// <c>CreateTableOperation</c>, and moves the function when the table moves to another schema.
 /// </summary>
 /// <remarks>
 /// It is a decorator, not a subclass of <c>NpgsqlMigrationsSqlGenerator</c>: that type's only public
@@ -56,12 +58,31 @@ internal sealed class HindsightMigrationsSqlGenerator(
         var orphanedDrops = model is null || historyWriter != HistoryWriter.Trigger
             ? []
             : CollectOrphanedTriggerDrops(model);
-        if (indexes.Count == 0 && seeds.Count == 0 && triggers.Count == 0 && orphanedDrops.Count == 0)
+        var retentionHorizon = model is null ? null : FindRetentionHorizonTable(model);
+        if (indexes.Count == 0 && seeds.Count == 0 && triggers.Count == 0 && orphanedDrops.Count == 0
+            && retentionHorizon is null)
         {
             return inner.Generate(operations, model, options);
         }
 
-        return inner.Generate(Rewrite(operations, indexes, seeds, triggers, orphanedDrops), model, options);
+        return inner.Generate(
+            Rewrite(operations, indexes, seeds, triggers, orphanedDrops, retentionHorizon), model, options);
+    }
+
+    // DESIGN.md D19: the retention-horizon table, present once some entity opts in with WithRetention().
+    // Its guard function is created right after it, in both writer modes — the function serves queries,
+    // not writes.
+    private static (string? Schema, string Table)? FindRetentionHorizonTable(IModel model)
+    {
+        foreach (var entityType in model.GetEntityTypes())
+        {
+            if (entityType[HindsightAnnotationNames.IsRetentionHorizonTable] is true && entityType.GetTableName() is { } table)
+            {
+                return (entityType.GetSchema(), table);
+            }
+        }
+
+        return null;
     }
 
     // Every live history table (DESIGN.md D5): the period-range index has nothing to do with which
@@ -256,7 +277,8 @@ internal sealed class HindsightMigrationsSqlGenerator(
         List<HistoryPeriodIndexModel> indexes,
         List<HistorySeedModel> seeds,
         List<HistoryTriggerModel> triggers,
-        List<(string HistoryTable, string? HistorySchema)> orphanedDrops)
+        List<(string HistoryTable, string? HistorySchema)> orphanedDrops,
+        (string? Schema, string Table)? retentionHorizon)
     {
         var byHistoryTableIndex = indexes.ToDictionary(index => (index.HistorySchema, index.HistoryTable));
         var byHistoryTableSeed = seeds.ToDictionary(seed => (seed.HistorySchema, seed.HistoryTable));
@@ -296,6 +318,33 @@ internal sealed class HindsightMigrationsSqlGenerator(
 
             switch (operation)
             {
+                case CreateTableOperation create
+                    when retentionHorizon is var (horizonSchema, horizonTable)
+                        && create.Schema == horizonSchema
+                        && create.Name == horizonTable:
+                    result.Add(new SqlOperation
+                    {
+                        Sql = RetentionSqlGenerator.CreateFunction(horizonSchema, sqlGenerationHelper),
+                    });
+                    break;
+
+                // The model's default schema changed, and the horizon table moved with it: the function
+                // is a standalone object that ALTER TABLE ... SET SCHEMA leaves behind, and the query's
+                // DbFunction mapping now names it in the new schema.
+                case RenameTableOperation moveHorizon
+                    when retentionHorizon is var (movedSchema, movedTable)
+                        && (moveHorizon.NewSchema ?? moveHorizon.Schema) == movedSchema
+                        && (moveHorizon.NewName ?? moveHorizon.Name) == movedTable:
+                    result.Add(new SqlOperation
+                    {
+                        Sql = RetentionSqlGenerator.DropFunction(moveHorizon.Schema, sqlGenerationHelper),
+                    });
+                    result.Add(new SqlOperation
+                    {
+                        Sql = RetentionSqlGenerator.CreateFunction(movedSchema, sqlGenerationHelper),
+                    });
+                    break;
+
                 case CreateTableOperation create
                     when byHistoryTableIndex.ContainsKey((create.Schema, create.Name))
                         || byHistoryTable.ContainsKey((create.Schema, create.Name))

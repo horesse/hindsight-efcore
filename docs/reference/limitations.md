@@ -21,7 +21,8 @@ Each of these fails loudly, so you find out during development rather than from 
 | Removing a primary-key property of a temporal entity | `InvalidOperationException` at model build | keep it, or remove `IsTemporal()` |
 | Changing a property's store type, precision/scale, max length or converter under the same column name | `InvalidOperationException` at model build | [give it a different column name](/migrations/schema-evolution#changing-a-property-s-type) instead |
 | Database providers other than Npgsql | `InvalidOperationException` on first use | none planned |
-| Retention and partitioning of history | history grows without bound | planned; the schema allows adding it without migrating existing data |
+| Partitioned history tables from a migration | migrations create a plain history table | [convert it with SQL](/migrations/retention#partitioning) |
+| Removing `WithRetention()` once a migration has it | `InvalidOperationException` at model build | keep it; see [Retention](/migrations/retention#turning-retention-on) |
 
 ## Known trade-offs
 
@@ -59,3 +60,12 @@ Each of these fails loudly, so you find out during development rather than from 
   wrap in one. See [Transactions](/writing/transactions#enableretryonfailure).
 - **Pooled and factory-created contexts need a singleton change-context provider.** See
   [Change context](/writing/change-context#pooled-and-factory-created-contexts).
+
+### Pruned history
+
+- **A query before the retention horizon fails with a `PostgresException`** (SQLSTATE `HS001`), not an
+  `InvalidOperationException`: the check runs in the database, so the error can surface while rows are
+  read. See [Queries after pruning](/migrations/retention#queries-after-pruning).
+- **`AllVersions()` and `History<T>()` return only the history that is left**, which may start with an
+  update. Read the horizon with `GetHistoryHorizonAsync` to tell.
+- **Retention needs `CREATE FUNCTION`** in the migration, under either writer.

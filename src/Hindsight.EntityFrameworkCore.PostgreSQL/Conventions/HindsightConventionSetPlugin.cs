@@ -19,6 +19,7 @@ internal sealed class HindsightConventionSetPlugin(IMigrationsAssembly migration
         ArgumentNullException.ThrowIfNull(conventionSet);
 
         conventionSet.ModelInitializedConventions.Add(new PeriodRangeFunctionConvention());
+        conventionSet.ModelInitializedConventions.Add(new RetentionGuardFunctionConvention());
         conventionSet.ModelFinalizingConventions.Add(new HistoryEntityTypeConvention(migrationsAssembly));
         return conventionSet;
     }

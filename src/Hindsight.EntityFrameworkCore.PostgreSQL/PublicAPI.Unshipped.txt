@@ -15,3 +15,7 @@ Hindsight.ChangeContext.ChangedByName.init -> void
 *REMOVED*Hindsight.ChangeContext.UserId.init -> void
 *REMOVED*Hindsight.ChangeContext.UserName.get -> string?
 *REMOVED*Hindsight.ChangeContext.UserName.init -> void
+Hindsight.TemporalEntityTypeBuilder<TEntity>.WithRetention() -> Hindsight.TemporalEntityTypeBuilder<TEntity!>!
+const Hindsight.HindsightAnnotationNames.HasRetention = "Hindsight:HasRetention" -> string!
+static Hindsight.HindsightDbContextExtensions.GetHistoryHorizonAsync<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.DateTimeOffset?>!
+static Hindsight.HindsightDbContextExtensions.PruneHistoryAsync<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, System.DateTimeOffset olderThan, int batchSize = 10000, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!

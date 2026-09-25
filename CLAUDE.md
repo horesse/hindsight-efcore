@@ -126,6 +126,7 @@ user-visible change, that is a bug in the PR.
 | why property-bag / two writers / no bulk interception | `DESIGN.md` D2–D4 |
 | history column set and indexes | `DESIGN.md` D5 |
 | what a migration does on add/remove/rename | `DESIGN.md` D6, `docs/migrations/schema-evolution.md` |
+| retention, the horizon guard, partitioning | `DESIGN.md` D19, `docs/migrations/retention.md` |
 | what is out of scope | `README.md` → Limitations |
 | how to release | `CONTRIBUTING.md` → Releasing |
 | how the docs are versioned and published | `docs/README.md` → Versions |

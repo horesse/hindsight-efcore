@@ -90,6 +90,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         foreach (var entityType in temporalEntityTypes)
         {
             ValidateTemporalEntityType(entityType);
+            ValidateRetentionNotRemoved(entityType, snapshotModel);
             var historyBuilder = BuildHistoryEntityType(modelBuilder, entityType, snapshotModel);
             if (historyBuilder is not null)
             {
@@ -99,6 +100,62 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         }
 
         RestoreOrphanedHistoryEntityTypes(modelBuilder, liveHistoryEntityTypeNames, snapshotModel);
+        AddRetentionHorizonEntityType(modelBuilder, temporalEntityTypes, snapshotModel);
+    }
+
+    // DESIGN.md D19. A migration that recorded WithRetention() may have been followed by a
+    // PruneHistoryAsync; dropping the option would drop the guard that makes AsOf before the horizon
+    // throw, and AsOf would then silently answer "did not exist" for pruned instants (golden rule 2).
+    private static void ValidateRetentionNotRemoved(IConventionEntityType entityType, IModel? snapshotModel)
+    {
+        if (entityType[HindsightAnnotationNames.HasRetention] is true
+            || snapshotModel?.FindEntityType(entityType.Name)?[HindsightAnnotationNames.HasRetention] is not true)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Entity '{entityType.DisplayName()}' was configured with WithRetention() in the last migration and "
+            + "no longer is. Its history may already have been pruned, and without WithRetention() a historical "
+            + "query before the retention horizon would silently answer from incomplete history. Keep "
+            + "WithRetention() on the entity; it costs nothing until PruneHistoryAsync is called.");
+    }
+
+    // DESIGN.md D19. The table that records, per history entity, the instant before which its history
+    // was pruned, and which the hindsight_history_retained() guard reads. Added only once some entity
+    // opts in with WithRetention(), so upgrading Hindsight alone changes no one's migrations; kept once
+    // a snapshot has it, so a later model change never drops it (golden rule 3 applies to the record of
+    // what history is missing, too). Like every other table without an explicit schema — and like the
+    // guard's DbFunction mapping — it follows the model's default schema; HindsightMigrationsSqlGenerator
+    // moves the function along when that changes.
+    private static void AddRetentionHorizonEntityType(
+        IConventionModelBuilder modelBuilder, List<IConventionEntityType> temporalEntityTypes, IModel? snapshotModel)
+    {
+        var inSnapshot = snapshotModel?.GetEntityTypes()
+            .Any(entityType => entityType[HindsightAnnotationNames.IsRetentionHorizonTable] is true) == true;
+        if (!inSnapshot
+            && !temporalEntityTypes.Any(entityType => entityType[HindsightAnnotationNames.HasRetention] is true))
+        {
+            return;
+        }
+
+        var horizonBuilder = modelBuilder.SharedTypeEntity(RetentionSqlGenerator.EntityName, typeof(Dictionary<string, object>));
+        if (horizonBuilder is null)
+        {
+            return;
+        }
+
+        horizonBuilder.ToTable(RetentionSqlGenerator.TableName);
+        horizonBuilder.HasAnnotation(HindsightAnnotationNames.IsRetentionHorizonTable, true);
+
+        var historyEntity = AddScalarColumn(horizonBuilder, RetentionSqlGenerator.HistoryEntityColumn, typeof(string), nullable: false);
+        var horizon = AddScalarColumn(horizonBuilder, RetentionSqlGenerator.HorizonColumn, typeof(DateTime), nullable: false);
+        horizon?.HasColumnType(TimestamptzColumnType);
+
+        if (historyEntity is not null)
+        {
+            horizonBuilder.PrimaryKey([historyEntity.Metadata]);
+        }
     }
 
     // EF Core's HistoryRepository.EnsureModel() always builds exactly one entity type, mapped from the

@@ -174,15 +174,34 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             HindsightAnnotationNames.PeriodEndColumnName,
             TemporalEntityTypeBuilderExtensions.DefaultPeriodEndColumnName);
 
+        // DESIGN.md D19: on an entity whose history may be pruned, the earliest instant the query reads
+        // is checked against the retention horizon in the database, before any row is scanned.
+        Expression? RetentionGuard(Expression earliestUtc)
+            => sourceEntityType.FindAnnotation(HindsightAnnotationNames.HasRetention)?.Value is true
+                ? Expression.Call(RetentionGuardFunction.Method, Expression.Constant(historyName), earliestUtc)
+                : null;
+
         var historyRoot = new EntityQueryRootExpression(historyEntityType);
         var historySource = kind switch
         {
-            HistoryReadKind.AsOf => AsOfSource(historyRoot, bagType, periodStart, periodEnd, node.Arguments[1]),
-            HistoryReadKind.AllVersions => AllVersionsSource(historyRoot, bagType, periodStart, periodEnd, range: null),
+            HistoryReadKind.AsOf => AsOfSource(
+                historyRoot, bagType, periodStart, periodEnd, node.Arguments[1], RetentionGuard(node.Arguments[1])),
+            HistoryReadKind.AllVersions => AllVersionsSource(
+                historyRoot, bagType, periodStart, periodEnd, range: null, retentionGuard: null),
             HistoryReadKind.FromTo => AllVersionsSource(
-                historyRoot, bagType, periodStart, periodEnd, (_rangeOverlaps, node.Arguments[1], node.Arguments[2])),
+                historyRoot,
+                bagType,
+                periodStart,
+                periodEnd,
+                (_rangeOverlaps, node.Arguments[1], node.Arguments[2]),
+                RetentionGuard(node.Arguments[1])),
             HistoryReadKind.ContainedIn => AllVersionsSource(
-                historyRoot, bagType, periodStart, periodEnd, (_rangeContainedBy, node.Arguments[1], node.Arguments[2])),
+                historyRoot,
+                bagType,
+                periodStart,
+                periodEnd,
+                (_rangeContainedBy, node.Arguments[1], node.Arguments[2]),
+                RetentionGuard(node.Arguments[1])),
             _ => HistorySource(historyRoot, bagType, periodStart),
         };
 
@@ -263,14 +282,19 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         Type bagType,
         string periodStart,
         string periodEnd,
-        Expression asOfUtc) // DateTime, member access on a captured object -> EF query parameter
+        Expression asOfUtc, // DateTime, member access on a captured object -> EF query parameter
+        Expression? retentionGuard)
     {
         var param = Expression.Parameter(bagType, "h");
-        var predicate = Expression.Lambda(
-            Expression.AndAlso(
-                Expression.LessThanOrEqual(Property(param, typeof(DateTime), periodStart), asOfUtc),
-                Expression.GreaterThan(Property(param, typeof(DateTime), periodEnd), asOfUtc)),
-            param);
+        Expression body = Expression.AndAlso(
+            Expression.LessThanOrEqual(Property(param, typeof(DateTime), periodStart), asOfUtc),
+            Expression.GreaterThan(Property(param, typeof(DateTime), periodEnd), asOfUtc));
+        if (retentionGuard is not null)
+        {
+            body = Expression.AndAlso(body, retentionGuard);
+        }
+
+        var predicate = Expression.Lambda(body, param);
 
         return Expression.Call(
             _queryableWhere.MakeGenericMethod(bagType), historyRoot, Expression.Quote(predicate));
@@ -288,7 +312,8 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
         Type bagType,
         string periodStart,
         string periodEnd,
-        (MethodInfo Operator, Expression FromUtc, Expression ToUtc)? range)
+        (MethodInfo Operator, Expression FromUtc, Expression ToUtc)? range,
+        Expression? retentionGuard)
     {
         var filterParam = Expression.Parameter(bagType, "h");
         Expression filter = Expression.NotEqual(
@@ -303,6 +328,11 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
                 Property(filterParam, typeof(DateTime), periodEnd));
             var window = Expression.Call(PeriodRangeFunction.Method, fromUtc, toUtc);
             filter = Expression.AndAlso(filter, Expression.Call(rangeOperator, versionPeriod, window));
+        }
+
+        if (retentionGuard is not null)
+        {
+            filter = Expression.AndAlso(filter, retentionGuard);
         }
 
         var filtered = Expression.Call(

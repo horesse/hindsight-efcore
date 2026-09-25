@@ -84,4 +84,23 @@ public sealed class TemporalEntityTypeBuilder<TEntity>
         _builder.HasAnnotation(HindsightAnnotationNames.HasDbSessionUser, true);
         return this;
     }
+
+    /// <summary>
+    /// Allows this entity's history to be pruned with
+    /// <see cref="HindsightDbContextExtensions.PruneHistoryAsync{TEntity}"/>, and makes <c>AsOf</c>,
+    /// <c>FromTo</c> and <c>ContainedIn</c> fail with a <c>PostgresException</c> (SQLSTATE <c>HS001</c>) for an instant
+    /// before the pruned history's horizon instead of answering from incomplete history.
+    /// </summary>
+    /// <remarks>
+    /// The next migration creates the <c>hindsight_retention_horizon</c> table and the
+    /// <c>hindsight_history_retained</c> function the check calls; nothing is removed by a migration.
+    /// Once a migration has recorded this option, removing it throws at model build: history that may
+    /// already be pruned would then answer <c>AsOf</c> for an instant it no longer covers.
+    /// </remarks>
+    /// <returns>The same builder instance so that calls can be chained.</returns>
+    public TemporalEntityTypeBuilder<TEntity> WithRetention()
+    {
+        _builder.HasAnnotation(HindsightAnnotationNames.HasRetention, true);
+        return this;
+    }
 }

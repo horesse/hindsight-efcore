@@ -31,6 +31,7 @@ Pass a builder to `IsTemporal` to change any default:
 | `HasPeriodStart(column)`, `HasPeriodEnd(column)` | Names the period columns. |
 | `Exclude(property)` | Leaves a property out of the history; see below. |
 | `WithDbSessionUser()` | Adds the `db_session_user` audit column; see [Change context](/writing/change-context#database-session-user). |
+| `WithRetention()` | Allows pruning old history with `PruneHistoryAsync`; see [Retention and partitioning](/migrations/retention). |
 
 ## Excluding properties
 

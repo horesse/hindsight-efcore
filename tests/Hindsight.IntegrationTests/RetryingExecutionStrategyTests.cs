@@ -171,7 +171,7 @@ public sealed class RetryingExecutionStrategyTests(PostgresFixture postgres)
 
     private sealed class StubChangeContextProvider : IChangeContextProvider
     {
-        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { UserId = "u1" };
+        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { ChangedBy = "u1" };
     }
 
     private sealed class WidgetContext(DbContextOptions<WidgetContext> options) : DbContext(options)

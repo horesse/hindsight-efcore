@@ -24,8 +24,8 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     {
         var provider = new RecordingChangeContextProvider(() => new ChangeContext
         {
-            UserId = "user-42",
-            UserName = "Ada Lovelace",
+            ChangedBy = "user-42",
+            ChangedByName = "Ada Lovelace",
             CorrelationId = "corr-1",
             Reason = "initial load",
             Extra = """{"ip":"10.0.0.1"}""",
@@ -43,12 +43,33 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
         Assert.Equal("""{"ip": "10.0.0.1"}""", row.Extra); // jsonb normalises whitespace
     }
 
+    // The input and output sides share one name (DESIGN.md D5): what goes in as ChangeContext.ChangedBy
+    // comes back out of History<T>() as Version<T>.ChangedBy, whichever writer stored it.
+    [Theory]
+    [InlineData(HistoryWriter.Interceptor)]
+    [InlineData(HistoryWriter.Trigger)]
+    public async Task ChangedBy_and_ChangedByName_read_back_under_the_same_names_from_History(HistoryWriter writer)
+    {
+        var provider = new RecordingChangeContextProvider(
+            () => new ChangeContext { ChangedBy = "user-42", ChangedByName = "Ada Lovelace" });
+        await using var h = await CreateAsync(
+            writer, nameof(ChangedBy_and_ChangedByName_read_back_under_the_same_names_from_History), new(_t0), provider);
+
+        h.Db.Policies.Add(NewPolicy());
+        await h.Db.SaveChangesAsync(Ct);
+        h.Db.ChangeTracker.Clear();
+
+        var version = Assert.Single(await h.Db.History<Policy>().ToListAsync(Ct));
+        Assert.Equal("user-42", version.ChangedBy);
+        Assert.Equal("Ada Lovelace", version.ChangedByName);
+    }
+
     [Theory]
     [InlineData(HistoryWriter.Interceptor)]
     [InlineData(HistoryWriter.Trigger)]
     public async Task Update_stamps_the_new_open_row_and_leaves_the_closed_row_untouched(HistoryWriter writer)
     {
-        var current = new ChangeContext { UserId = "u1", Reason = "created" };
+        var current = new ChangeContext { ChangedBy = "u1", Reason = "created" };
         var provider = new RecordingChangeContextProvider(() => current);
         var time = new MutableTimeProvider(_t0);
         await using var h = await CreateAsync(
@@ -59,7 +80,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
         await h.Db.SaveChangesAsync(Ct);
 
         time.Advance(TimeSpan.FromHours(1));
-        current = new ChangeContext { UserId = "u2", Reason = "premium adjusted" };
+        current = new ChangeContext { ChangedBy = "u2", Reason = "premium adjusted" };
         policy.Premium = 250m;
         await h.Db.SaveChangesAsync(Ct);
 
@@ -78,7 +99,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     [InlineData(HistoryWriter.Trigger)]
     public async Task Delete_tombstone_carries_the_context(HistoryWriter writer)
     {
-        var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "remover", Reason = "gdpr erasure" });
+        var provider = new RecordingChangeContextProvider(() => new ChangeContext { ChangedBy = "remover", Reason = "gdpr erasure" });
         var time = new MutableTimeProvider(_t0);
         await using var h = await CreateAsync(writer, nameof(Delete_tombstone_carries_the_context), time, provider);
 
@@ -103,7 +124,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     [InlineData(HistoryWriter.Trigger)]
     public async Task WithReason_overrides_the_provider_reason_only_inside_the_scope(HistoryWriter writer)
     {
-        var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u", Reason = "provider reason" });
+        var provider = new RecordingChangeContextProvider(() => new ChangeContext { ChangedBy = "u", Reason = "provider reason" });
         var time = new MutableTimeProvider(_t0);
         await using var h = await CreateAsync(
             writer, nameof(WithReason_overrides_the_provider_reason_only_inside_the_scope), time, provider);
@@ -203,7 +224,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     [InlineData(HistoryWriter.Trigger)]
     public async Task WithReason_nested_on_the_same_context_innermost_wins_and_restores_on_dispose(HistoryWriter writer)
     {
-        var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u", Reason = "provider reason" });
+        var provider = new RecordingChangeContextProvider(() => new ChangeContext { ChangedBy = "u", Reason = "provider reason" });
         var time = new MutableTimeProvider(_t0);
         await using var h = await CreateAsync(
             writer, nameof(WithReason_nested_on_the_same_context_innermost_wins_and_restores_on_dispose), time, provider);
@@ -330,7 +351,7 @@ public sealed class ChangeContextTests(PostgresFixture postgres)
     [InlineData(HistoryWriter.Trigger)]
     public async Task The_provider_is_called_once_per_SaveChanges_regardless_of_row_count(HistoryWriter writer)
     {
-        var provider = new RecordingChangeContextProvider(() => new ChangeContext { UserId = "u" });
+        var provider = new RecordingChangeContextProvider(() => new ChangeContext { ChangedBy = "u" });
         await using var h = await CreateAsync(
             writer, nameof(The_provider_is_called_once_per_SaveChanges_regardless_of_row_count), new(_t0), provider);
 

@@ -173,8 +173,8 @@ internal static class HistoryRowWriter
     // the earlier row's context untouched.
     private static IEnumerable<KeyValuePair<string, string?>> ContextColumns(ChangeContext changeContext)
     {
-        yield return new(HindsightHistoryColumns.ChangedBy, changeContext.UserId);
-        yield return new(HindsightHistoryColumns.ChangedByName, changeContext.UserName);
+        yield return new(HindsightHistoryColumns.ChangedBy, changeContext.ChangedBy);
+        yield return new(HindsightHistoryColumns.ChangedByName, changeContext.ChangedByName);
         yield return new(HindsightHistoryColumns.CorrelationId, changeContext.CorrelationId);
         yield return new(HindsightHistoryColumns.Reason, changeContext.Reason);
         yield return new(HindsightHistoryColumns.Extra, changeContext.Extra);

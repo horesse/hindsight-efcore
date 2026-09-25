@@ -12,8 +12,8 @@ public sealed class FixedChangeContextProvider : IChangeContextProvider
 {
     private static readonly ChangeContext _context = new()
     {
-        UserId = "bench-user",
-        UserName = "Bench User",
+        ChangedBy = "bench-user",
+        ChangedByName = "Bench User",
         CorrelationId = "11111111-1111-1111-1111-111111111111",
         Reason = "benchmark",
     };

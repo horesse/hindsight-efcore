@@ -168,7 +168,7 @@ public sealed class PooledContextChangeContextTests(PostgresFixture postgres)
     // refuses to resolve it from the root provider before getting anywhere near its constructor.
     private sealed class ScopedProvider : IChangeContextProvider
     {
-        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { UserId = "should never run" };
+        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { ChangedBy = "should never run" };
     }
 
     private sealed class AmbientUserHolder
@@ -180,6 +180,6 @@ public sealed class PooledContextChangeContextTests(PostgresFixture postgres)
     // instead of capturing a scoped dependency at construction time.
     private sealed class AmbientReadingProvider(AmbientUserHolder ambient) : IChangeContextProvider
     {
-        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { UserId = ambient.CurrentUser };
+        public ChangeContext GetChangeContext(DbContext context) => ChangeContext.Empty with { ChangedBy = ambient.CurrentUser };
     }
 }

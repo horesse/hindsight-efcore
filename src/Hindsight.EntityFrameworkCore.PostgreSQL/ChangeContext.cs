@@ -19,14 +19,18 @@ public sealed record ChangeContext
     public static ChangeContext Empty { get; } = new();
 
     /// <summary>
-    /// Application identifier of the user who made the change, written to <c>changed_by</c>. A
+    /// Application identifier of whoever made the change (a user, a service, a job), written to
+    /// <c>changed_by</c> and read back as <see cref="Version{TEntity}.ChangedBy"/>. A
     /// <see cref="string"/> so the application is free to use a GUID, a numeric id, an email or a
     /// subject claim without Hindsight imposing a shape.
     /// </summary>
-    public string? UserId { get; init; }
+    public string? ChangedBy { get; init; }
 
-    /// <summary>Display name of the user who made the change, written to <c>changed_by_name</c>.</summary>
-    public string? UserName { get; init; }
+    /// <summary>
+    /// Display name of whoever made the change, written to <c>changed_by_name</c> and read back as
+    /// <see cref="Version{TEntity}.ChangedByName"/>.
+    /// </summary>
+    public string? ChangedByName { get; init; }
 
     /// <summary>
     /// Correlation identifier for the unit of work (for example a trace id or a request id), written

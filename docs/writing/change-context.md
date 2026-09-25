@@ -9,8 +9,8 @@ request, and why. Hindsight stores that *change context* on every version, in fi
 
 | `ChangeContext` member | history column | type |
 |---|---|---|
-| `UserId` | `changed_by` | `text` |
-| `UserName` | `changed_by_name` | `text` |
+| `ChangedBy` | `changed_by` | `text` |
+| `ChangedByName` | `changed_by_name` | `text` |
 | `CorrelationId` | `correlation_id` | `text` |
 | `Reason` | `reason` | `text` |
 | `Extra` | `extra` | `jsonb` |

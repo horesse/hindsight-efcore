@@ -327,10 +327,50 @@ public sealed class SchemaEvolutionModelTests
         Assert.Contains("primary key", ex.Message);
     }
 
-    private static IModel BuildModel(Action<ModelBuilder> configure, IModel? previousSnapshot = null)
+    // A real ModelSnapshot is generated C#, and it declares every property by its *provider* CLR type:
+    // an enum with no converter is written as `Property<int>`, an Npgsql LTree as `Property<string>`
+    // with HasColumnType("ltree") — the model-level CLR type and the converter that bridges it are gone.
+    // The previous-snapshot check must see such a column as unchanged, or the second `migrations add`
+    // after IsTemporal() fails on a column nobody touched.
+    [Theory]
+    [InlineData(typeof(PolicyStatus), typeof(int), "integer")]
+    [InlineData(typeof(LTree), typeof(string), "ltree")]
+    public void A_column_mapped_through_a_provider_type_converter_is_unchanged_against_a_generated_snapshot(
+        Type modelType, Type snapshotType, string storeType)
     {
-        StubMigrationsAssembly.Current.Value =
-            previousSnapshot is null ? null : new StubModelSnapshot(previousSnapshot);
+        var current = BuildModel(
+            b =>
+            {
+                var e = b.Entity<Policy>();
+                e.Property(modelType, "Tag").HasColumnName("tag");
+                e.IsTemporal();
+            },
+            previousSnapshot: new GeneratedStyleSnapshot(("tag", snapshotType, storeType)));
+
+        var history = current.HistoryEntityType(typeof(Policy));
+        Assert.NotNull(history.FindProperty("tag"));
+        Assert.True(history.FindProperty("tag")![HindsightAnnotationNames.Orphaned] is not true);
+    }
+
+    [Fact]
+    public void A_real_store_type_change_is_still_rejected_against_a_generated_snapshot()
+    {
+        Assert.Throws<InvalidOperationException>(() => BuildModel(
+            b =>
+            {
+                var e = b.Entity<Policy>();
+                e.Property<LTree>("Tag").HasColumnName("tag");
+                e.IsTemporal();
+            },
+            previousSnapshot: new GeneratedStyleSnapshot(("tag", typeof(int), "integer"))));
+    }
+
+    private static IModel BuildModel(Action<ModelBuilder> configure, IModel? previousSnapshot = null)
+        => BuildModel(configure, previousSnapshot is null ? null : new StubModelSnapshot(previousSnapshot));
+
+    private static IModel BuildModel(Action<ModelBuilder> configure, ModelSnapshot? previousSnapshot)
+    {
+        StubMigrationsAssembly.Current.Value = previousSnapshot;
 
         try
         {
@@ -383,7 +423,7 @@ public sealed class SchemaEvolutionModelTests
     // Feeds the convention a caller-supplied snapshot model instead of a real migrations assembly.
     private sealed class StubMigrationsAssembly : IMigrationsAssembly
     {
-        public static readonly AsyncLocal<StubModelSnapshot?> Current = new();
+        public static readonly AsyncLocal<ModelSnapshot?> Current = new();
 
         public IReadOnlyDictionary<string, TypeInfo> Migrations { get; } = new Dictionary<string, TypeInfo>();
 
@@ -403,6 +443,51 @@ public sealed class SchemaEvolutionModelTests
 
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
+        }
+    }
+
+    // What `dotnet ef migrations add` writes for Policy made temporal, plus one extra column: every
+    // property declared by its provider CLR type and store type, the way CSharpSnapshotGenerator does.
+    private sealed class GeneratedStyleSnapshot((string Column, Type ClrType, string StoreType) extra) : ModelSnapshot
+    {
+        private static readonly string _sourceName = typeof(Policy).FullName!;
+        private static readonly string _historyName = _sourceName + "#History";
+
+        protected override void BuildModel(ModelBuilder modelBuilder)
+        {
+            modelBuilder.Entity(_sourceName, b =>
+            {
+                b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("integer");
+                b.Property<string>("Number").IsRequired().HasColumnType("text");
+                b.Property<int>("Status").HasColumnType("integer");
+                b.Property(extra.ClrType, extra.Column).HasColumnType(extra.StoreType).HasColumnName(extra.Column);
+                b.HasKey("Id");
+                b.ToTable("policies");
+                b.HasAnnotation(HindsightAnnotationNames.HistoryEntityType, _historyName)
+                    .HasAnnotation(HindsightAnnotationNames.IsTemporal, true);
+            });
+
+            modelBuilder.Entity(_historyName, b =>
+            {
+                b.Property<long>("history_id").ValueGeneratedOnAdd().HasColumnType("bigint").HasColumnName("history_id");
+                b.Property<int?>("Id").HasColumnType("integer").HasColumnName("Id");
+                b.Property<string>("Number").HasColumnType("text").HasColumnName("Number");
+                b.Property<int?>("Status").HasColumnType("integer").HasColumnName("Status");
+                b.Property(extra.ClrType, extra.Column).HasColumnType(extra.StoreType).HasColumnName(extra.Column);
+                b.Property<string>("changed_by").HasColumnType("text").HasColumnName("changed_by");
+                b.Property<string>("changed_by_name").HasColumnType("text").HasColumnName("changed_by_name");
+                b.Property<string>("correlation_id").HasColumnType("text").HasColumnName("correlation_id");
+                b.Property<string>("extra").HasColumnType("jsonb").HasColumnName("extra");
+                b.Property<short>("operation").HasColumnType("smallint").HasColumnName("operation");
+                b.Property<string>("reason").HasColumnType("text").HasColumnName("reason");
+                b.Property<DateTime>("valid_from").HasColumnType("timestamp with time zone").HasColumnName("valid_from");
+                b.Property<DateTime>("valid_to").ValueGeneratedOnAdd().HasColumnType("timestamp with time zone")
+                    .HasColumnName("valid_to").HasDefaultValueSql("'infinity'::timestamp with time zone");
+                b.HasKey("history_id");
+                b.HasIndex(["Id", "valid_from"], "ix_policies_history_version").IsDescending(false, true);
+                b.ToTable("policies_history");
+                b.HasAnnotation(HindsightAnnotationNames.IsHistoryTable, true);
+            });
         }
     }
 

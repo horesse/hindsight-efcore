@@ -12,6 +12,29 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before. The one exception is 1.4, which renames two `ChangeContext` members (below).
 
+## Upgrading to 1.4.1
+
+### Workarounds you can remove
+
+1.4.1 fixes four things that 1.4.0 and earlier needed a workaround for. Nothing needs a database
+step. Each workaround still works if you keep it.
+
+- **The `HDST001` analyzer loads on every .NET 10 SDK.** Up to 1.4.0 it was built against a newer
+  compiler than the 10.0.1xx SDKs ship, so the build failed with `CS9057`. If you removed the analyzer from the
+  build (for example in `Directory.Build.targets`), remove that too.
+- **The trigger writer works with `EnableRetryOnFailure()`**, which Aspire turns on by default. A plain
+  `SaveChanges` no longer throws, and a retried attempt records the change context too. You can turn
+  retries back on. See [Transactions](/writing/transactions#enableretryonfailure).
+- **A temporal table with a foreign key migrates in one step.** EF Core creates such a table after its
+  history table, and earlier versions put the seed and the trigger right after the history table,
+  before the table they read existed (`relation … does not exist`). They now follow the main table. A migration you
+  reordered by hand still applies.
+- **An enum without `HasConversion`, or an Npgsql `LTree`, no longer fails the next migration** with
+  "changed its store type". The check compared the model's CLR type with the provider type that the
+  migration snapshot stores. An explicit converter you added only for this (such as `LTree` ↔ `string`)
+  is no longer needed. The next `migrations add` after you remove it should be empty; check that before
+  you apply it.
+
 ## Upgrading to 1.4
 
 ### `ChangeContext` members renamed to match `Version<TEntity>`

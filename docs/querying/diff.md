@@ -15,6 +15,7 @@ values differ, each as a `PropertyChange`:
 | member | value |
 |---|---|
 | `Property` | the EF Core `IProperty` that changed: `Property.Name`, its CLR type, column name and annotations |
+| `Path` | where the property sits, dot-separated: `"Status"`, or `"Address.City"` for a member of a [complex property or owned reference](/configuration/nested-members); use it as the label |
 | `OldValue` | the value in the older version, or `null` when `older` is `null` |
 | `NewValue` | the value in the newer version |
 
@@ -25,7 +26,9 @@ The diff runs in memory over versions you have already loaded. It sends no query
 
 ## Which properties are compared
 
-Every property that history records, in model order (key first). A property you
+Every property that history records, in model order (key first), then the properties of complex
+properties and owned references, reported one by one: when a member is set to `null`, each of its
+properties that had a value comes back with a `null` new value. A property you
 [excluded](/configuration/temporal-entities#excluding-properties) is not in history, so it is never
 compared. Values are compared with each property's EF Core value comparer, the same one change
 tracking uses: arrays and collections compare by content, and a property with a value converter

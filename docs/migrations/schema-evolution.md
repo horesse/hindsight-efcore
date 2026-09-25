@@ -16,6 +16,9 @@ them and generates their DDL along with the main table's. One rule decides *what
 | change a property's type, precision/scale, max length or converter (same column name) | — | **rejected** |
 | remove a primary-key property | — | **rejected** |
 
+The columns of [complex properties and owned references](/configuration/nested-members) follow the same
+rules: a member added, removed or renamed is a set of columns added, removed or renamed.
+
 ## Adding a property
 
 Add the property to the entity. The migration adds the column to both tables. Existing history rows

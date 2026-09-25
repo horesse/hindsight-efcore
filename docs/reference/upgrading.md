@@ -10,7 +10,28 @@ release, see the [release notes](https://github.com/horesse/hindsight-efcore/rel
 
 Hindsight follows semantic versioning: a minor or patch release never needs a code change on your side,
 but it may add a manual database step (listed here) or start rejecting something that was silently
-wrong before.
+wrong before. The one exception is 1.4, which renames two `ChangeContext` members (below).
+
+## Upgrading to 1.4
+
+### `ChangeContext` members renamed to match `Version<TEntity>`
+
+The "who made the change" members of `ChangeContext` now carry the same names you read them back
+with from [`History()`](/querying/history), which are also the history column names:
+
+| 1.3 and earlier | 1.4 | read back as | history column |
+|---|---|---|---|
+| `UserId` | `ChangedBy` | `Version<TEntity>.ChangedBy` | `changed_by` |
+| `UserName` | `ChangedByName` | `Version<TEntity>.ChangedByName` | `changed_by_name` |
+
+The old names are gone, so an `IChangeContextProvider` that sets them stops compiling (CS0117 in an
+object initializer or a `with` expression). Rename them in the provider; the values, the columns they
+land in and the queries that read them are unchanged. `Version<TEntity>`, `CorrelationId`, `Reason`
+and `Extra` are untouched.
+
+**No database step.** The history columns and the Trigger writer's session settings keep their names,
+so there is no migration to add and nothing to re-run. `ChangeContext.ToString()` now prints
+`ChangedBy = …` and `ChangedByName = …`; if you match on that text in logs, update the pattern.
 
 ## Upgrading to 1.3
 

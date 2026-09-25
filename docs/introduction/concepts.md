@@ -65,7 +65,7 @@ It contains every mapped property of the entity except the ones you
 ## Change context
 
 The database knows that a row changed. Only the application knows who was acting, on behalf of which
-request, and why. Hindsight stores that as a `ChangeContext` (user id, user name, correlation id,
+request, and why. Hindsight stores that as a `ChangeContext` (who changed it, their display name, correlation id,
 reason and JSON extras) on every version. See [Change context](/writing/change-context).
 
 ## History writers

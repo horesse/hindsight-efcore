@@ -238,8 +238,8 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
 
         return
         [
-            new(HistoryTriggerSqlGenerator.ChangedByKey, changeContext.UserId ?? string.Empty),
-            new(HistoryTriggerSqlGenerator.ChangedByNameKey, changeContext.UserName ?? string.Empty),
+            new(HistoryTriggerSqlGenerator.ChangedByKey, changeContext.ChangedBy ?? string.Empty),
+            new(HistoryTriggerSqlGenerator.ChangedByNameKey, changeContext.ChangedByName ?? string.Empty),
             new(HistoryTriggerSqlGenerator.CorrelationIdKey, changeContext.CorrelationId ?? string.Empty),
             new(HistoryTriggerSqlGenerator.ReasonKey, changeContext.Reason ?? string.Empty),
             new(HistoryTriggerSqlGenerator.ExtraKey, changeContext.Extra ?? string.Empty),

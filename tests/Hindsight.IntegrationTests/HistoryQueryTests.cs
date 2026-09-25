@@ -123,7 +123,7 @@ public sealed class HistoryQueryTests(PostgresFixture postgres)
     [Fact]
     public async Task History_populates_the_change_context_columns_from_the_registered_provider()
     {
-        var current = new ChangeContext { UserId = "u1", UserName = "Ada", CorrelationId = "c1", Reason = "created" };
+        var current = new ChangeContext { ChangedBy = "u1", ChangedByName = "Ada", CorrelationId = "c1", Reason = "created" };
         var provider = new RecordingChangeContextProvider(() => current);
         await using var h = await CreateAsync(
             nameof(History_populates_the_change_context_columns_from_the_registered_provider), provider);
@@ -134,7 +134,7 @@ public sealed class HistoryQueryTests(PostgresFixture postgres)
         await h.Db.SaveChangesAsync(Ct);
 
         h.Time.Advance(TimeSpan.FromHours(1));
-        current = new ChangeContext { UserId = "u2", UserName = "Boole", CorrelationId = "c2", Reason = "adjusted" };
+        current = new ChangeContext { ChangedBy = "u2", ChangedByName = "Boole", CorrelationId = "c2", Reason = "adjusted" };
         policy.Premium = 200m;
         await h.Db.SaveChangesAsync(Ct);
         h.Db.ChangeTracker.Clear();
@@ -151,7 +151,7 @@ public sealed class HistoryQueryTests(PostgresFixture postgres)
     public async Task History_tombstone_carries_the_delete_context()
     {
         var provider = new RecordingChangeContextProvider(
-            () => new ChangeContext { UserId = "remover", Reason = "gdpr erasure" });
+            () => new ChangeContext { ChangedBy = "remover", Reason = "gdpr erasure" });
         await using var h = await CreateAsync(nameof(History_tombstone_carries_the_delete_context), provider);
 
         var policy = NewPolicy();

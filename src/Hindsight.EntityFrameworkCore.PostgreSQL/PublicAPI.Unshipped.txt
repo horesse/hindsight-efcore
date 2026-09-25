@@ -8,3 +8,11 @@ static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.Entit
 static Hindsight.HindsightDbContextExtensions.Diff<TEntity>(this Microsoft.EntityFrameworkCore.DbContext! context, TEntity? older, TEntity! newer) -> System.Collections.Generic.IReadOnlyList<Hindsight.PropertyChange!>!
 static Hindsight.HindsightQueryableExtensions.ContainedIn<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!
 static Hindsight.HindsightQueryableExtensions.FromTo<TEntity>(this System.Linq.IQueryable<TEntity!>! source, System.DateTimeOffset from, System.DateTimeOffset to) -> System.Linq.IQueryable<TEntity!>!
+Hindsight.ChangeContext.ChangedBy.get -> string?
+Hindsight.ChangeContext.ChangedBy.init -> void
+Hindsight.ChangeContext.ChangedByName.get -> string?
+Hindsight.ChangeContext.ChangedByName.init -> void
+*REMOVED*Hindsight.ChangeContext.UserId.get -> string?
+*REMOVED*Hindsight.ChangeContext.UserId.init -> void
+*REMOVED*Hindsight.ChangeContext.UserName.get -> string?
+*REMOVED*Hindsight.ChangeContext.UserName.init -> void

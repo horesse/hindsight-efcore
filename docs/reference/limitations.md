@@ -69,4 +69,6 @@ Each of these fails loudly, so you find out during development rather than from 
   read. See [Queries after pruning](/migrations/retention#queries-after-pruning).
 - **`AllVersions()` and `History<T>()` return only the history that is left**, which may start with an
   update. Read the horizon with `GetHistoryHorizonAsync` to tell.
-- **Retention needs `CREATE FUNCTION`** in the migration, under either writer.
+- **Retention creates a PL/pgSQL function** in the migration, under either writer. If the use of PL/pgSQL
+  was revoked from your migration role, the migration fails and rolls back. See
+  [Turning retention on](/migrations/retention#turning-retention-on).

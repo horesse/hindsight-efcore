@@ -26,8 +26,11 @@ Nothing else changes, and nothing is deleted:
 
 <<< @/../tests/Hindsight.IntegrationTests/HistoryRetentionTests.Retention_ddl_has_the_expected_shape.verified.sql
 
-The function needs the same `CREATE FUNCTION` privilege as the
-[trigger writer](/writing/trigger), even if you use the interceptor writer.
+The function is written in PL/pgSQL, under either writer. A role that can create the table can also
+create the function: PostgreSQL grants the use of PL/pgSQL to everyone by default. If your database
+administrator revoked it, the migration fails with `permission denied for language plpgsql` (SQLSTATE
+`42501`). The migration runs in one transaction, so the table isn't left behind and no data is
+touched. Ask for `GRANT USAGE ON LANGUAGE plpgsql TO <migration role>`, or don't enable retention.
 
 ::: warning Removing `WithRetention()` later is rejected
 Once a migration includes `WithRetention()`, removing it throws at model build. History may already be

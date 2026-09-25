@@ -1235,8 +1235,17 @@ before it would silently answer "did not exist" for pruned entities. Decided sha
 
 - **Opt-in per entity**, `IsTemporal(t => t.WithRetention())` (`HindsightAnnotationNames.HasRetention`).
   `PruneHistoryAsync` on an entity without it throws `InvalidOperationException`. Opt-in because the
-  guard costs a function call per historical query and needs `CREATE FUNCTION`; everyone else sees no
+  guard costs a function call per historical query and adds a PL/pgSQL function; everyone else sees no
   migration diff from upgrading Hindsight.
+- **Privileges.** PostgreSQL has no separate "create function" privilege: a role with `CREATE` on the
+  schema, which the migration needs for the table anyway, creates the function too, and `USAGE` on
+  `plpgsql` is granted to `PUBLIC` by default. Only when an administrator revoked that does the function
+  fail, with `42501 permission denied for language plpgsql`. Verified against PostgreSQL 14: EF runs the
+  migration in one transaction and PostgreSQL DDL is transactional, so the horizon table rolls back with it
+  and nothing is half-applied. The failure is loud, at `database update`, and never at query time, so
+  Hindsight adds no handling of its own; the docs name the error and the `GRANT` that fixes it. (This is
+  unlike the trigger writer, whose `CREATE TRIGGER` needs the separate `TRIGGER` privilege on the table,
+  D3.)
 - **A metadata table in the EF model**, `hindsight_retention_horizon (history_entity text PK, horizon
   timestamptz NOT NULL)`, a property-bag entity type (`Hindsight#RetentionHorizon`, tagged
   `IsRetentionHorizonTable`) the convention adds once any entity opts in, so the differ creates it in the

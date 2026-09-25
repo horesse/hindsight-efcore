@@ -154,14 +154,14 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
                 $"{operatorName}: the history entity type '{historyName}' for '{sourceEntityType.DisplayName()}' is missing "
                 + "from the model. This is a bug in Hindsight.");
 
-        // Owned references and complex properties do not have columns on the history table, so a
-        // reconstructed entity would carry silent nulls for them instead of their real values.
-        if (sourceEntityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned())
-            || sourceEntityType.GetComplexProperties().Any())
+        // Only table-split complex properties and owned references have columns on the history table
+        // (DESIGN.md D9); for any other nested shape a reconstructed entity would carry silent nulls
+        // instead of its real values. IsTemporal() already rejects these shapes at model finalization.
+        if (VersionedColumns.FindUnsupportedMember(sourceEntityType) is { } unsupported)
         {
             throw new NotSupportedException(
-                $"{operatorName} is not supported for '{sourceEntityType.DisplayName()}': it has owned or complex members, "
-                + "which the history table does not carry. Read the history table with FromSql.");
+                $"{operatorName} is not supported for '{sourceEntityType.DisplayName()}': {unsupported}, which the "
+                + "history table does not carry (DESIGN.md D9). Read the history table with FromSql.");
         }
 
         var bagType = typeof(Dictionary<string, object>);
@@ -376,30 +376,14 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             Expression.Quote(historyId));
     }
 
+    // h => new TEntity { Prop = EF.Property<TProp>(h, "column"), Address = new Address { … }, … }. Table-split
+    // complex properties and owned references (DESIGN.md D9) become nested member-inits over their own
+    // mirrored columns; an optional one is null when every one of its columns is NULL, the same rule EF
+    // applies when it reads the main table.
     private static List<MemberBinding> BuildBindings(IEntityType sourceEntityType, ParameterExpression bag, string operatorName)
     {
-        var bindings = new List<MemberBinding>();
-
-        foreach (var property in sourceEntityType.GetProperties())
-        {
-            if (property.FindAnnotation(HindsightAnnotationNames.IsExcluded)?.Value is true
-                || property.IsShadowProperty())
-            {
-                continue;
-            }
-
-            if (property.PropertyInfo is not { SetMethod: not null } member)
-            {
-                throw new NotSupportedException(
-                    $"{operatorName} cannot reconstruct '{sourceEntityType.DisplayName()}': property '{property.Name}' has "
-                    + $"no setter. Entities read through {operatorName} require settable properties.");
-            }
-
-            if (property.GetColumnName() is { } column)
-            {
-                bindings.Add(Expression.Bind(member, Property(bag, property.ClrType, column)));
-            }
-        }
+        var columns = VersionedColumns.Collect(sourceEntityType);
+        var bindings = BindMembers(sourceEntityType, [], columns, bag, operatorName, sourceEntityType);
 
         if (bindings.Count == 0)
         {
@@ -409,6 +393,129 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 
         return bindings;
     }
+
+    private static List<MemberBinding> BindMembers(
+        IReadOnlyTypeBase declaringType,
+        IReadOnlyList<IReadOnlyPropertyBase> path,
+        List<VersionedColumn> columns,
+        ParameterExpression bag,
+        string operatorName,
+        IEntityType sourceEntityType)
+    {
+        var bindings = new List<MemberBinding>();
+
+        foreach (var column in columns)
+        {
+            if (!column.Path.SequenceEqual(path) || column.Property.IsShadowProperty())
+            {
+                continue;
+            }
+
+            if (column.Property.PropertyInfo is not { SetMethod: not null } member)
+            {
+                throw new NotSupportedException(
+                    $"{operatorName} cannot reconstruct '{sourceEntityType.DisplayName()}': property '{column.DisplayName}' has "
+                    + $"no setter. Entities read through {operatorName} require settable properties.");
+            }
+
+            bindings.Add(Expression.Bind(member, Property(bag, column.Property.ClrType, column.Column)));
+        }
+
+        foreach (var complexProperty in declaringType.GetComplexProperties())
+        {
+            BindNested(complexProperty, complexProperty.ComplexType, complexProperty.IsNullable);
+        }
+
+        if (declaringType is IReadOnlyEntityType entityType)
+        {
+            foreach (var navigation in VersionedColumns.OwnedReferences(entityType))
+            {
+                BindNested(navigation, navigation.TargetEntityType, !navigation.ForeignKey.IsRequiredDependent);
+            }
+        }
+
+        return bindings;
+
+        void BindNested(IReadOnlyPropertyBase nestedMember, IReadOnlyTypeBase nestedType, bool nullable)
+        {
+            var nestedPath = (IReadOnlyList<IReadOnlyPropertyBase>)[.. path, nestedMember];
+            var nestedColumns = columns.Where(c => c.Path.Count >= nestedPath.Count && c.Path.Take(nestedPath.Count).SequenceEqual(nestedPath)).ToList();
+            if (nestedColumns.Count == 0)
+            {
+                return;
+            }
+
+            var memberDisplayName = string.Join('.', nestedPath.Select(m => m.Name));
+            if (nestedMember.PropertyInfo is not { SetMethod: not null } member)
+            {
+                throw new NotSupportedException(
+                    $"{operatorName} cannot reconstruct '{sourceEntityType.DisplayName()}': member '{memberDisplayName}' has "
+                    + $"no setter. Entities read through {operatorName} require settable properties.");
+            }
+
+            var clrType = nestedType.ClrType;
+            if (!clrType.IsValueType && clrType.GetConstructor(Type.EmptyTypes) is null)
+            {
+                throw new NotSupportedException(
+                    $"{operatorName} cannot reconstruct '{sourceEntityType.DisplayName()}': the type of member "
+                    + $"'{memberDisplayName}', '{clrType.Name}', has no parameterless constructor. Entities read "
+                    + $"through {operatorName} build complex and owned members with one and settable properties.");
+            }
+
+            Expression value = Expression.MemberInit(
+                Expression.New(clrType),
+                BindMembers(nestedType, nestedPath, columns, bag, operatorName, sourceEntityType));
+            if (value.Type != member.PropertyType)
+            {
+                value = Expression.Convert(value, member.PropertyType);
+            }
+
+            if (nullable)
+            {
+                value = NullWhenAbsent(value, member.PropertyType, nestedPath, nestedColumns);
+            }
+
+            bindings.Add(Expression.Bind(member, value));
+        }
+
+        // An optional member is absent when its columns say so, by the rule EF itself applies to an optional
+        // dependent sharing its owner's table: when it has a required property of its own, that property's
+        // column is NULL; otherwise every column is NULL. EF translates a member access through
+        // `column == null ? null : new T { … }` (a Where / OrderBy on p.Address.City composes into SQL) only
+        // when the test is a null check of one column — `a == null && b == null` does not translate — so
+        // the all-columns case is a chain of one-column checks. That chain materializes, but EF cannot
+        // translate a filter on a member reached through it; the docs say so (docs/configuration/nested-members.md).
+        Expression NullWhenAbsent(
+            Expression value, Type memberType, IReadOnlyList<IReadOnlyPropertyBase> nestedPath, List<VersionedColumn> nestedColumns)
+        {
+            var absent = Expression.Constant(null, memberType);
+            var required = nestedColumns.FirstOrDefault(
+                c => c.Path.SequenceEqual(nestedPath) && !c.Property.IsNullable && !c.Property.IsShadowProperty());
+            if (required is not null)
+            {
+                return Expression.Condition(IsNull(required), absent, value);
+            }
+
+            Expression result = absent;
+            for (var i = nestedColumns.Count - 1; i >= 0; i--)
+            {
+                result = Expression.Condition(IsNull(nestedColumns[i]), result, value);
+            }
+
+            return result;
+        }
+
+        Expression IsNull(VersionedColumn column)
+        {
+            var nullableType = AsNullable(column.Property.ClrType);
+            return Expression.Equal(Property(bag, nullableType, column.Column), Expression.Constant(null, nullableType));
+        }
+    }
+
+    private static Type AsNullable(Type clrType)
+        => clrType.IsValueType && Nullable.GetUnderlyingType(clrType) is null
+            ? typeof(Nullable<>).MakeGenericType(clrType)
+            : clrType;
 
     private static string PeriodColumn(IReadOnlyEntityType source, string annotationName, string fallback)
         => source.FindAnnotation(annotationName)?.Value as string ?? fallback;

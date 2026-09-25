@@ -264,16 +264,9 @@ internal sealed class HistoryTriggerContextInterceptor : SaveChangesInterceptor
         tracker.AutoDetectChangesEnabled = false;
         try
         {
-            foreach (var entry in tracker.Entries())
-            {
-                if (entry.Metadata.FindAnnotation(HindsightAnnotationNames.IsTemporal)?.Value is true
-                    && entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            // Owned references of a temporal owner count too (DESIGN.md D9): their change fires the trigger
+            // on the owner's table like any other column update.
+            return TemporalChanges.Any(tracker);
         }
         finally
         {

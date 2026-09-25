@@ -212,18 +212,15 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
                 + "history requires a table mapping; call ToTable(...) or remove IsTemporal().");
         }
 
-        // Owned references and complex properties live on their own IConventionEntityType / complex type,
-        // so GetProperties() below never sees their columns: mirroring would silently drop them from
-        // history, and a SaveChanges that only touches one of them would silently write no history row at
-        // all. Reject at model build time instead — matches the read-side guard in
-        // HistoryQueryRootRewriter (DESIGN.md D12).
-        if (entityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned())
-            || entityType.GetComplexProperties().Any())
+        // Table-split complex properties and owned references are versioned column by column
+        // (VersionedColumns, DESIGN.md D9). Every other nested shape either has no columns on this table
+        // (owned collections, an owned reference with its own table) or lives in one JSON document the
+        // read side cannot rebuild the way EF does (ToJson(), complex collections): mirroring would drop
+        // it from history, or bring it back wrong. Reject at model build time instead — matches the
+        // read-side guard in HistoryQueryRootRewriter (DESIGN.md D12).
+        if (VersionedColumns.FindUnsupportedMember(entityType) is { } unsupported)
         {
-            throw new NotSupportedException(
-                $"Entity '{entityType.DisplayName()}' is temporal but has owned or complex members, which "
-                + "Hindsight cannot mirror into a history table (their columns live on their own type, not "
-                + "on this entity's). Remove IsTemporal(), or remove the owned/complex members.");
+            throw new NotSupportedException(UnsupportedMemberMessage(entityType.DisplayName(), unsupported));
         }
 
         ValidateReservedColumnNames(entityType);
@@ -235,6 +232,13 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         // costs nothing at model-build time and never has to be re-run.
         ValidateIdentifierLengths(entityType, ResolveHistoryTableName(entityType));
     }
+
+    // Shared with HistoryQueryRootRewriter's defense-in-depth guard, so both name the shape the same way.
+    internal static string UnsupportedMemberMessage(string entityName, string unsupported)
+        => $"Entity '{entityName}' is temporal but {unsupported}, which Hindsight cannot version (DESIGN.md "
+            + "D9): history supports table-split complex properties and owned references only. Map the member "
+            + "as a table-split ComplexProperty / OwnsOne, flatten it into scalar properties, or remove "
+            + "IsTemporal() and read the history with FromSql.";
 
     // PostgreSQL truncates any identifier over MaxIdentifierBytes to that length, silently and with no
     // error (NAMEDATALEN - 1). Two entities whose generated table, function, trigger or index name
@@ -317,25 +321,16 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
         var periodColumns = new HashSet<string>(StringComparer.Ordinal) { periodStart, periodEnd };
 
-        foreach (var property in entityType.GetProperties())
+        foreach (var versioned in VersionedColumns.Collect(entityType))
         {
-            if (property[HindsightAnnotationNames.IsExcluded] is true)
-            {
-                // Never mirrored onto the history table (MirrorEntityColumns skips it too), so there is
-                // no actual column to collide with.
-                continue;
-            }
-
-            var columnName = property.GetColumnName();
-            if (columnName is null)
-            {
-                continue;
-            }
+            // Excluded properties are never mirrored onto the history table (Collect skips them), so
+            // there is no actual column for them to collide with.
+            var columnName = versioned.Column;
 
             if (reservedColumns.TryGetValue(columnName, out var reservedFor))
             {
                 throw new InvalidOperationException(
-                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{property.Name}' is "
+                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{versioned.DisplayName}' is "
                     + $"mapped to column '{columnName}', which Hindsight reserves on the history table for "
                     + $"{reservedFor}. Map the property to a different column with HasColumnName(...), or "
                     + "exclude it from history with Exclude(...) if it does not need to be versioned.");
@@ -344,7 +339,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             if (periodColumns.Contains(columnName))
             {
                 throw new InvalidOperationException(
-                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{property.Name}' is "
+                    $"Entity '{entityType.DisplayName()}' is temporal but its property '{versioned.DisplayName}' is "
                     + $"mapped to column '{columnName}', which is configured as the history table's period "
                     + "column. Map the property to a different column with HasColumnName(...), pick a "
                     + "different period column name with HasPeriodStart(...)/HasPeriodEnd(...), or exclude "
@@ -413,19 +408,10 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
 
     private static void MirrorEntityColumns(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
     {
-        foreach (var property in source.GetProperties())
+        // The entity's own columns, then those of its table-split complex properties and owned references
+        // (DESIGN.md D9): all of them live on the main table, so all of them are plain history columns.
+        foreach (var (columnName, property, _) in VersionedColumns.Collect(source))
         {
-            if (property[HindsightAnnotationNames.IsExcluded] is true)
-            {
-                continue;
-            }
-
-            var columnName = property.GetColumnName();
-            if (columnName is null)
-            {
-                continue;
-            }
-
             // History drops every NOT NULL constraint of the original (DESIGN.md D5): old versions of a
             // removed column must still be storable, and a writer may not populate every column. Map
             // value types as Nullable<T> so the column can actually be null.
@@ -504,19 +490,9 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             return;
         }
 
-        foreach (var property in source.GetProperties())
+        foreach (var versioned in VersionedColumns.Collect(source))
         {
-            if (property[HindsightAnnotationNames.IsExcluded] is true)
-            {
-                continue;
-            }
-
-            var columnName = property.GetColumnName();
-            if (columnName is null)
-            {
-                continue;
-            }
-
+            var (columnName, property, _) = versioned;
             var previous = snapshotHistory.FindProperty(columnName);
             if (previous is null || previous[HindsightAnnotationNames.Orphaned] is true)
             {
@@ -528,7 +504,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             if (!StoreFacetsMatch(property, previous))
             {
                 throw new InvalidOperationException(
-                    $"Entity '{source.DisplayName()}' is temporal and property '{property.Name}' (column "
+                    $"Entity '{source.DisplayName()}' is temporal and property '{versioned.DisplayName}' (column "
                     + $"'{columnName}') changed its store type, precision/scale, max length or value "
                     + "converter since the last migration. Hindsight mirrors a live column's type onto the "
                     + "history table under the same name (DESIGN.md D2), so this would alter an existing "

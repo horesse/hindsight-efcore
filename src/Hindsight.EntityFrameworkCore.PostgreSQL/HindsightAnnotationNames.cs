@@ -92,4 +92,11 @@ public static class HindsightAnnotationNames
     /// properties <c>Diff</c> compares, resolved once per model rather than on every call.
     /// </summary>
     internal const string DiffPlan = Prefix + "DiffPlan";
+
+    /// <summary>
+    /// Runtime annotation on a temporal entity type: its cached <c>TemporalWritePlan</c> — the history entity
+    /// type, versioned columns (nested members included, DESIGN.md D9) and key columns the Interceptor
+    /// writer needs, resolved once per model rather than for every tracked entry.
+    /// </summary>
+    internal const string WritePlan = Prefix + "WritePlan";
 }

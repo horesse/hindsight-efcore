@@ -1,5 +1,6 @@
 using Hindsight.Query;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace Hindsight.Writers;
@@ -55,6 +56,7 @@ internal sealed class HistorySnapshotGuardInterceptor : SaveChangesInterceptor
             return;
         }
 
+        var ownedOfTemporalChanged = false;
         foreach (var entry in context.ChangeTracker.Entries())
         {
             if (entry.State is not (EntityState.Added or EntityState.Modified or EntityState.Deleted))
@@ -64,13 +66,44 @@ internal sealed class HistorySnapshotGuardInterceptor : SaveChangesInterceptor
 
             if (HistoryOrigin.IsFromHistory(entry.Entity))
             {
-                throw new InvalidOperationException(
-                    $"The '{entry.Metadata.DisplayName()}' instance being saved was read from a Hindsight "
-                    + "historical query (AsOf(), AllVersions() or History<T>()). Historical results are "
-                    + "read-only (DESIGN.md D7): re-attaching one and calling SaveChanges would write a "
-                    + "past snapshot back as the current version. Copy the values you need onto a new "
-                    + "instance, or onto one loaded with a normal query / DbSet.Find(), and save that.");
+                throw SnapshotSaved(entry);
+            }
+
+            ownedOfTemporalChanged |= TemporalChanges.IsChangedOwnedOfTemporal(entry);
+        }
+
+        if (!ownedOfTemporalChanged)
+        {
+            return;
+        }
+
+        // A change to an owned reference of a re-attached snapshot leaves the snapshot's own entry
+        // Unchanged (DESIGN.md D9), so the loop above never saw it; find the owners the same way the
+        // writers do. The Entries() call above already ran DetectChanges.
+        var tracker = context.ChangeTracker;
+        var autoDetectChangesEnabled = tracker.AutoDetectChangesEnabled;
+        tracker.AutoDetectChangesEnabled = false;
+        try
+        {
+            foreach (var (entry, _) in TemporalChanges.Collect(tracker))
+            {
+                if (HistoryOrigin.IsFromHistory(entry.Entity))
+                {
+                    throw SnapshotSaved(entry);
+                }
             }
         }
+        finally
+        {
+            tracker.AutoDetectChangesEnabled = autoDetectChangesEnabled;
+        }
     }
+
+    private static InvalidOperationException SnapshotSaved(EntityEntry entry)
+        => new(
+            $"The '{entry.Metadata.DisplayName()}' instance being saved was read from a Hindsight "
+            + "historical query (AsOf(), AllVersions() or History<T>()). Historical results are "
+            + "read-only (DESIGN.md D7): re-attaching one and calling SaveChanges would write a "
+            + "past snapshot back as the current version. Copy the values you need onto a new "
+            + "instance, or onto one loaded with a normal query / DbSet.Find(), and save that.");
 }

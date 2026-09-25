@@ -454,28 +454,83 @@ methods anywhere in the tree, the same way it already detects `Include`/`AsTrack
 
 It's an interval join on overlapping periods. A silently wrong answer is worse than no feature.
 
-## D9. TPH hierarchies, owned references and complex properties are rejected
+## D9. TPH hierarchies are rejected; table-split complex properties and owned references are versioned
 
-One clear exception at model validation. Support is an issue, not a stretch goal.
+TPH (and any inheritance hierarchy): one clear exception at model validation. Support is an issue, not a
+stretch goal.
 
-**Owned references and complex properties — resolved 2026-09-11.** `HistoryEntityTypeConvention.MirrorEntityColumns`
-iterates `source.GetProperties()` on the temporal entity's own `IConventionEntityType`; a property that
-lives on an owned entity type (`OwnsOne`) or a complex type belongs to *that* type's own
-`IConventionEntityType` / `IConventionComplexType` and is never returned by the owner's
-`GetProperties()`, even though (for table splitting, the only mapping Hindsight or EF supports without
-extra configuration) its column is physically present on the same table. Mirroring would therefore
-silently drop those columns from history, and `HistoryRowPlan.HasVersionedModification` — which also
-only looks at the top-level entry's properties — would silently write **zero** history rows for a
-`SaveChanges` that touched only an owned/complex member (exactly the golden-rule-2 outcome this package
-exists to prevent). `ValidateTemporalEntityType` therefore rejects it before any of that can happen:
-`entityType.GetNavigations().Any(n => n.TargetEntityType.IsOwned()) || entityType.GetComplexProperties().Any()`
-throws `NotSupportedException` at `IsTemporal()` / model-finalization time, mirroring the identical guard
-`HistoryQueryRootRewriter` already had on the read side (below) — now unreachable for any entity that
-went through the convention, but left in place since it is the same defense-in-depth pattern as the TPH
-check just above it, and a direct annotation-level bypass of the convention is the only way to reach it.
-Owned collections were already out of scope (no columns on the owner's table at all) and stay so.
-Revisit if a later version reconstructs owned/complex members on the read side (D12) *and* mirrors their
-columns on write — both sides would need to move together, so partial support is not planned.
+**Complex properties and owned references — resolved by spike, 2026-09-25** (it replaces the 2026-09-11
+rejection of both). A table-split complex property (nested and optional ones included) or owned reference
+(nested ones included) is versioned column by column; every other nested shape is still rejected. The
+2026-09-11 entry rejected both because four places only looked at the owner's own `GetProperties()`:
+mirroring, the Interceptor's change detection (a save touching only a nested member would have written
+**no** row), the D6 checks and the D12 projection. It set the bar for lifting that: read and write move
+together, no partial support. The spike tested each hypothesis on real PostgreSQL, raw EF Core first and
+then through Hindsight:
+
+- **Mirroring — confirmed.** One internal enumerator, `VersionedColumns.Collect`, walks the entity's
+  properties, then its complex properties (recursively) and owned reference navigations (recursively),
+  and is now the only definition of "a versioned column" — used by the convention (mirroring, reserved
+  names, D6 facet check), both writers' helpers, the delete re-read, the rewriter and `Diff`. Found on the
+  way: at model finalization `GetColumnName()` of a nested property is its *base* name (`City`); the
+  table-split name EF actually uses (`Address_City`) comes only from `GetColumnName(StoreObjectIdentifier)`.
+  Nested columns use the table overload; the entity's own properties keep `GetColumnName()` so no existing
+  history column changes name. An owned type's key properties are skipped (they share the owner's key
+  columns), and a column reached twice (table-splitting column sharing) is mirrored once.
+- **Projection — confirmed, with one EF limit.** The member-init D12 builds nests one `new T { … }` per
+  complex property / owned reference; `Where` / `OrderBy` / `Select` on `p.Address.City` compose into the
+  one SQL statement. An optional member must come back `null` by EF's own rule for optional dependents:
+  absent when its required property's column is `NULL`, or, with no required property, when every column
+  is. EF translates a member access through `c == null ? null : new T { … }` only when the test is a
+  one-column null check — `a == null && b == null`, `&`, `!(… || …)` and a chain of one-column
+  conditionals all fail with "could not be translated" (verified). So the required-property form is used
+  when there is one (full composition); otherwise a chain of one-column conditionals, which materializes
+  correctly but cannot be filtered on in SQL — EF throws, nothing is returned wrong. Documented in
+  `docs/configuration/nested-members.md` and `docs/reference/limitations.md`.
+- **Change detection — confirmed.** A complex member's change is tracked on the owner's own entry
+  (owner `Modified`, `ComplexPropertyEntry.IsModified`, `PropertyValues[IProperty]` reads nested leaves);
+  replacing it with an equal value leaves the owner `Unchanged`, so no version, in both writers. An owned
+  reference has its own entry — `Modified`, or `Added` + `Deleted` when replaced, `Deleted` when set to
+  `null` — while the owner stays `Unchanged`, and after `= null` the owner's `Reference(...).TargetEntry`
+  is `null`, so the owner cannot be found from its side. `TemporalChanges.Collect` goes the other way:
+  a table-split owned entity's key is the ownership foreign key, position by position the owner's key at
+  every nesting level, so owned entries are matched to their temporal owner's entry by (root entity type,
+  key values); the owner gets one `Modified` version however many of its members changed. An owned entry
+  whose owner is not tracked throws instead of writing nothing. The same lookup feeds the Trigger writer's
+  "does this save touch a temporal entity" check (otherwise an owned-only save would push no change
+  context) and the D7 snapshot guard (otherwise a re-attached snapshot with only an owned member changed
+  would be saved).
+- **JSON (`ToJson()`) — refuted, stays rejected.** A complex property cannot be declared on a property-bag
+  entity type at all (EF 10: "Adding the complex property … as an indexer property isn't supported",
+  dotnet/efcore#31244), so the history type can only hold the `jsonb` document as a scalar. Rebuilding the
+  member from it needs client-side deserialization that neither composes with `Where` nor follows EF's
+  JSON mapping (`HasJsonPropertyName`, converters) — a wrong value rather than an exception, golden rule
+  2. Complex collections (JSON-only in EF 10) share this.
+- **Trigger, seed, D6 — confirmed with no special case.** They already work from the history entity
+  type's columns: the trigger copies `NEW.address_city` like any column, and adding / removing a nested
+  member is `AddColumn` / an orphaned column (D6), including the function refresh after `AddColumn`.
+
+Still rejected at model finalization with `NotSupportedException` naming the member
+(`VersionedColumns.FindUnsupportedMember`, also the read-side defense in `HistoryQueryRootRewriter`):
+owned collections, an owned reference mapped to a table of its own, JSON-mapped complex properties /
+owned references, complex collections. `Exclude(...)` stays top-level; a nested property carrying the
+`IsExcluded` annotation is honored by the enumerator but not offered as API.
+
+`Diff` (D17) reports nested members leaf by leaf; `PropertyChange.Path` (new public member, `"Address.City"`)
+names them, since two members can declare the same property name. Values are read with each path
+segment's `IClrPropertyGetter.GetClrValue`, `null` through an absent optional member.
+
+Covered by `NestedMemberHistoryTests` (both writers: insert; complex, nested complex, optional complex,
+owned, nested owned changes; equal replacement; owned replaced and cleared; owner + member in one save;
+delete-by-id tombstone; raw SQL under the trigger; `AsOf` / `AllVersions` / `FromTo` / `History<T>`
+reconstruction; the no-required-property member; one-query composition; Verify SQL; snapshot guard;
+`Diff` paths), `NestedMemberSchemaEvolutionTests` (both writers: add / remove nested members, history
+only gains columns, writes continue) and `HistoryEntityTypeConventionTests` (mirrored column set, owned key
+not repeated, each rejected shape, reserved name on a nested member).
+
+Revisit if: EF Core allows complex properties on property-bag entity types (JSON could then be mirrored as
+a complex property and rebuilt by EF itself), or translates a multi-column null check through a member
+access (the no-required-property filter limit would go away).
 
 ## D10. Naming
 
@@ -572,7 +627,7 @@ query cache is not busted per timestamp.
 replacement, differing only in how the history source is shaped: no period predicate, and
 `historyRoot.Where(operation <> 3).OrderByDescending(valid_from).Select(h => new Policy { ... }).AsNoTracking()`.
 The projection, the `AsNoTracking`, and every guard (first operator, non-temporal, `Include`,
-`AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex) are shared with `AsOf` in
+`AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, unsupported nested members) are shared with `AsOf` in
 `HistoryQueryRootRewriter`.
 - **Tombstone excluded (`operation <> 3`).** The delete tombstone (D5) carries the last column
   values before the delete but an empty interval `[ts, ts)`. Returned as a "version" it would be a
@@ -596,7 +651,7 @@ history source has **no filter at all** and is ordered
 `OrderByDescending(valid_from).ThenByDescending(history_id)`; the projection is a nested member-init
 `h => new Version<TEntity> { Entity = new TEntity { … }, ValidFrom = (DateTimeOffset)…, ValidTo = …,
 Operation = (VersionOperation)…, ChangedBy = …, … }`, then `AsNoTracking()`. Every guard (first
-operator, non-temporal, `Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex)
+operator, non-temporal, `Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, unsupported nested members)
 and `BuildBindings` for the inner entity are shared with `AsOf` / `AllVersions` in
 `HistoryQueryRootRewriter`.
 - **Tombstone included.** This is the one place it should be: `History<T>()` is the audit view, and
@@ -656,9 +711,10 @@ Two things root replacement does not give for free, both handled in the rewrite 
 Further rules the hook enforces (all three markers): the marker must be the first operator on the
 query (else `InvalidOperationException` — move it before `Where`/`OrderBy`/…; not reachable for
 `History<T>()`, which starts from the `DbContext`); on a non-temporal entity it
-throws `InvalidOperationException` naming the entity; on an inheritance hierarchy or an entity with
-owned / complex members it throws `NotSupportedException` (those column sets are not reconstructable
-from the history table — use `FromSql`) — both are now unreachable in practice, since `IsTemporal()`
+throws `InvalidOperationException` naming the entity; on an inheritance hierarchy or an entity with a
+nested member D9 does not version (owned collection, JSON-mapped member, …) it throws
+`NotSupportedException` (those column sets are not reconstructable from the history table — use
+`FromSql`). Table-split complex properties and owned references are rebuilt as nested member-inits (D9) — both are now unreachable in practice, since `IsTemporal()`
 itself already rejects either shape at model finalization (D9), but the guard stays as the same
 defense-in-depth this file uses elsewhere.
 
@@ -1057,9 +1113,11 @@ snapshots or a loaded current entity.
   (D12); carrying an `IModel` on it would put metadata into every row and couple the read path to this
   feature. The per-entity plan — versioned properties, key properties — is computed once and cached as
   a runtime annotation (`HindsightAnnotationNames.DiffPlan`).
-- **Which properties.** The same selection as the Interceptor writer's `HistoryRowPlan`: not
-  `Exclude(...)`-d, and mirrored onto the history table. Period and change-context columns are not
-  source properties, so they never appear. Order is `GetProperties()` order (key first).
+- **Which properties.** The same selection as the Interceptor writer (`VersionedColumns.Collect`,
+  D9): not `Exclude(...)`-d, and mirrored onto the history table, members of table-split complex
+  properties and owned references included, leaf by leaf with `PropertyChange.Path`. Period and
+  change-context columns are not source properties, so they never appear. Order is `GetProperties()`
+  order (key first), then complex properties, then owned references.
 - **Equality is the property's `ValueComparer`** (`IReadOnlyProperty.GetValueComparer()`, public API),
   so arrays (`text[]`, `bytea`), collections and converted values compare by content, exactly as change
   tracking does; the key check uses `GetKeyValueComparer()`. Values are read with
@@ -1093,7 +1151,7 @@ version valid at some point in Q3", "every version that started and ended inside
 `AsOf` (one instant) and `AllVersions` (the whole timeline). Same mechanism as D12: a marker call, the
 same `IQueryExpressionInterceptor` hook, root replacement in `HistoryQueryRootRewriter`, the same
 projection, `AsNoTracking()`, save-back tag (D7) and every guard (first operator, non-temporal,
-`Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, owned/complex). The history source is
+`Include`, `AsTracking`, `ExecuteUpdate`/`ExecuteDelete`, TPH, unsupported nested members). The history source is
 `AllVersions`' with a range predicate added to its filter:
 
 | operator | SQL | as comparisons |

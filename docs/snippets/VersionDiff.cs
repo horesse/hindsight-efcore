@@ -20,7 +20,7 @@ public static class VersionDiff
             foreach (var change in db.Diff(previous, version))
             {
                 Console.WriteLine(
-                    $"{version.ValidFrom:u} {version.ChangedBy}: {change.Property.Name} {change.OldValue} → {change.NewValue}");
+                    $"{version.ValidFrom:u} {version.ChangedBy}: {change.Path} {change.OldValue} → {change.NewValue}");
             }
 
             previous = version;

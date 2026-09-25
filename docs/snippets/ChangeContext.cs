@@ -17,8 +17,8 @@ public sealed class HttpChangeContextProvider(IHttpContextAccessor accessor) : I
         var user = accessor.HttpContext?.User;
         return new ChangeContext
         {
-            UserId = user?.FindFirst("sub")?.Value,
-            UserName = user?.Identity?.Name,
+            ChangedBy = user?.FindFirst("sub")?.Value,
+            ChangedByName = user?.Identity?.Name,
             CorrelationId = Activity.Current?.TraceId.ToString(),
             Extra = """{"source":"web"}""",
         };

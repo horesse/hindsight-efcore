@@ -63,7 +63,10 @@ creates its own database on it. Not run in CI — it is manual, and the numbers 
    next release" from "API already in the hands of users," and for a stable (non-preview) release you
    should also uncomment `PackageValidationBaselineVersion` in `src/Directory.Build.props` to point at
    the version you just shipped — CI's `Pack` step then diffs every subsequent PR's public surface
-   against the real published package. CI fails the build if a tagged release ships with
+   against the real published package. A `*REMOVED*` line in `PublicAPI.Unshipped.txt` deletes its
+   match from `PublicAPI.Shipped.txt` instead of moving. A major release that removed API also carries
+   `src/Hindsight.EntityFrameworkCore.PostgreSQL/CompatibilitySuppressions.xml` (the reviewed list of
+   intended breaks against the old baseline); delete it once the baseline points at the new major. CI fails the build if a tagged release ships with
    `PublicAPI.Shipped.txt` unchanged (see `.github/workflows/ci.yml`), which is the backstop for
    forgetting this step. Do the same for `src/Hindsight.Analyzers/AnalyzerReleases.Unshipped.md`: move
    its new-rule rows under a `## Release X.Y.Z` header in `AnalyzerReleases.Shipped.md` — the analyzer

@@ -33,5 +33,5 @@ public sealed class DemoChangeContextProvider : IChangeContextProvider
     // Registered as a singleton and called once per SaveChanges that writes a temporal entity -
     // read ambient, per-operation state here, never cache it in a field.
     public ChangeContext GetChangeContext(DbContext context) =>
-        new() { UserId = CurrentUser.Id, UserName = CurrentUser.Name };
+        new() { ChangedBy = CurrentUser.Id, ChangedByName = CurrentUser.Name };
 }

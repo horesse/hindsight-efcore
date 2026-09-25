@@ -81,7 +81,7 @@ Revisit if: a column kind still diverges after mirroring (ranges, composite/enum
   trigger: there is no `NEW`/`OLD` column for them. Needs only table ownership — no superuser, no
   extension.
 
-Change context (user id, user name, correlation id, reason, extra) is supplied by the application
+Change context (changed by, changed-by name, correlation id, reason, extra) is supplied by the application
 through an `IChangeContextProvider`, registered with `UseHindsight(h => h.WithChangeContext<T>())`.
 
 - `Interceptor`: the provider is called **once per `SaveChanges`**, in `SavingChanges` alongside the
@@ -205,6 +205,14 @@ the four names on some other type.
 | `reason` | `text null` | |
 | `extra` | `jsonb null` | |
 | `db_session_user` | `text not null default session_user` | **opt-in only** (`IsTemporal(t => t.WithDbSessionUser())`); absent unless the entity opts in — see D16 |
+
+The public API names the change-context members after these columns, on both sides:
+`ChangeContext.ChangedBy` / `ChangedByName` go in, `Version<TEntity>.ChangedBy` / `ChangedByName` come
+out. Through 1.x the input side was `UserId` / `UserName`, so a user had to learn a mapping between
+what they wrote and what they read back; 2.0 renamed the input to match (the value is not always a
+user either — a service or a job is just as valid). The columns and the trigger's session settings
+(`hindsight.changed_by*`) kept their names: they were already right, and renaming them would have
+forced a history-table migration on every existing database (golden rule 3).
 
 Indexes: `(pk columns, valid_from desc)` and GiST on `tstzrange(valid_from, valid_to)` (D14).
 No FKs from history to the main table (parent may be deleted). All `not null` / unique / check
@@ -1063,7 +1071,7 @@ snapshots or a loaded current entity.
 - **The no-op update is not hidden.** The Interceptor writer records a version when EF marks a
   versioned property modified with an unchanged value (D3); its diff is empty, and the docs say so.
 - **No change-context fields on `PropertyChange`.** Who/when stay on `Version<TEntity>`, so the diff
-  adds no new names to the `ChangedBy` / `ChangeContext.UserId` inconsistency.
+  adds no third set of names for the same data (D5).
 - **Not added:** a helper that turns a whole `History<T>()` sequence into per-version change sets. It
   needs grouping by key and rules around delete / re-insert that callers may want differently; the
   pairwise call covers it in a short loop (`docs/querying/diff.md`). Revisit on demand.

@@ -8,7 +8,9 @@ order: 50
 
 When you call `IsTemporal()` on an entity whose table already has rows, the migration creates the
 history table **and seeds it automatically**: right after `CREATE TABLE` (and, under the
-[Trigger writer](/writing/history-writers), after the trigger), it appends
+[Trigger writer](/writing/history-writers), after the trigger), it appends the statement below. When the
+same migration creates the main table after the history table, which EF Core does for a table with a
+foreign key, the seed and the trigger follow the main table instead:
 
 ```sql
 INSERT INTO policies_history (id, number, status, premium, effective_from, valid_from, valid_to, operation)

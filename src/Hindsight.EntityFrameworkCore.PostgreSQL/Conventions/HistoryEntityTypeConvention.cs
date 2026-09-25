@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Microsoft.EntityFrameworkCore.Metadata.Conventions;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 namespace Hindsight.Conventions;
@@ -25,7 +26,9 @@ namespace Hindsight.Conventions;
 /// back from the snapshot verbatim — columns, key, indexes — and tagged <see cref="HindsightAnnotationNames.Orphaned"/>
 /// on the entity type itself, so the differ never emits a <c>DropTable</c> either.
 /// </remarks>
-internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrationsAssembly) : IModelFinalizingConvention
+internal sealed class HistoryEntityTypeConvention(
+    IMigrationsAssembly migrationsAssembly,
+    IRelationalTypeMappingSource typeMappingSource) : IModelFinalizingConvention
 {
     // Column types Hindsight fixes on history tables (DESIGN.md D5).
     private const string TimestamptzColumnType = "timestamp with time zone";
@@ -356,7 +359,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
         => (string?)source[HindsightAnnotationNames.HistoryTableName]
             ?? source.GetTableName() + TemporalEntityTypeBuilderExtensions.DefaultHistoryTableSuffix;
 
-    private static IConventionEntityTypeBuilder? BuildHistoryEntityType(
+    private IConventionEntityTypeBuilder? BuildHistoryEntityType(
         IConventionModelBuilder modelBuilder, IConventionEntityType source, IModel? snapshotModel)
     {
         var historyIdentityName = ResolveHistoryIdentityName(source, snapshotModel);
@@ -483,7 +486,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     // differ. Compared against the *previous snapshot's* history property (not the current one, which
     // this same convention is about to rebuild from the live source) — the one column set that actually
     // reflects what is physically still in the history table today.
-    private static void ValidateNoStoreFacetChanges(IConventionEntityType source, IEntityType? snapshotHistory)
+    private void ValidateNoStoreFacetChanges(IConventionEntityType source, IEntityType? snapshotHistory)
     {
         if (snapshotHistory is null)
         {
@@ -537,7 +540,7 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
     // when either side is null is safe because CopyStoreFacets would not have set an explicit type on the
     // history column either, so the differ resolves both the old and the new mirrored column through the
     // exact same default mapping from the (compared below) ClrType and reaches the same physical type.
-    private static bool StoreFacetsMatch(IReadOnlyProperty current, IReadOnlyProperty previous)
+    private bool StoreFacetsMatch(IReadOnlyProperty current, IReadOnlyProperty previous)
     {
         var currentType = current.GetColumnType();
         var previousType = previous.GetColumnType();
@@ -554,12 +557,24 @@ internal sealed class HistoryEntityTypeConvention(IMigrationsAssembly migrations
             && current.GetScale() == previous.GetScale();
     }
 
-    private static Type ResolvedStoreClrType(IReadOnlyProperty property)
+    // A generated ModelSnapshot declares every property by its provider CLR type and drops the converter
+    // that got it there: an enum with no HasConversion is `Property<int>`, an Npgsql LTree is
+    // `Property<string>` with HasColumnType("ltree"). The live property still has its model CLR type and
+    // no converter of its own yet (the provider's type mapping supplies one only once the model is built),
+    // so with no explicit converter the provider CLR type comes from the same type mapping the finished
+    // model will use — on both sides, so a snapshot built from a live model compares the same way.
+    private Type ResolvedStoreClrType(IReadOnlyProperty property)
     {
         var type = property.GetValueConverter()?.ProviderClrType
             ?? property.GetProviderClrType()
-            ?? property.ClrType;
+            ?? DefaultProviderClrType(property);
         return Nullable.GetUnderlyingType(type) ?? type;
+    }
+
+    private Type DefaultProviderClrType(IReadOnlyProperty property)
+    {
+        var mapping = typeMappingSource.FindMapping(property.ClrType, property.GetColumnType());
+        return mapping?.Converter?.ProviderClrType ?? property.ClrType;
     }
 
     // DESIGN.md D6. A column present on the history table in the previous model snapshot but no longer

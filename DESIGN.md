@@ -103,6 +103,18 @@ through an `IChangeContextProvider`, registered with `UseHindsight(h => h.WithCh
   commits it with the data, the trigger's rows and the pushed context together. One extra round-trip
   per `SaveChanges`; measured in the benchmarks. `ExecuteUpdate`/`ExecuteDelete` and raw SQL do not
   pass through it, so the trigger records their history with `NULL` context columns.
+  **Under a retrying execution strategy (`EnableRetryOnFailure()`, on by default in Aspire) — changed
+  2026-09-26.** A transaction opened in `SavingChanges` sits outside the strategy and would not survive a
+  retry, so it used to be refused with a Hindsight message. With no caller transaction (and
+  `AutoTransactionBehavior` not `Never`, under which EF Core bypasses the strategy) the interceptor now
+  opens none: it sets `AutoTransactionBehavior.Always` for that one `SaveChanges` (restored in the
+  terminal hook), so EF Core opens its own transaction *inside* the strategy on every attempt, and the
+  same class, also an `IDbTransactionInterceptor`, pushes the captured context from `TransactionStarted`
+  into each of them. A retried attempt gets a fresh transaction and a fresh push, so its history rows
+  carry the context — covered by `RetryingExecutionStrategyTests` (a transient failure injected into
+  the first attempt). The Interceptor writer still refuses: its history rows are written in
+  `SavedChanges`, outside the strategy, so a retry cannot re-run them; wrapping the save in
+  `CreateExecutionStrategy().Execute(...)` with the caller's own transaction stays the fix there.
 
 `GetChangeContext` is synchronous: it runs inside both `SaveChanges` and `SaveChangesAsync`, and
 blocking on an async source there would be sync-over-async. The provider type is resolved per
@@ -317,8 +329,13 @@ a delete is meant to be read (D12).
   fully-built snapshot `IModel` — comparing "not yet resolved" against "resolved default" is a false
   mismatch on essentially every column nobody ever called `HasColumnType` on, so it is skipped rather
   than guessed at; `ResolvedStoreClrType`'s `ClrType` fallback (used when neither a converter nor an
-  explicit column type is configured) still catches a plain CLR type change either way. Covered by
-  `SchemaEvolutionModelTests`.
+  explicit column type is configured) still catches a plain CLR type change either way. The CLR type is
+  compared as the *provider* CLR type, resolved through `IRelationalTypeMappingSource` when no converter
+  is configured (fixed 2026-09-26): a generated `ModelSnapshot` declares every property by its provider
+  type and drops the converter the provider's type mapping supplied — an enum with no `HasConversion` is
+  `Property<int>`, an Npgsql `LTree` is `Property<string>` with `HasColumnType("ltree")` — so comparing
+  the live property's model CLR type rejected the second migration after `IsTemporal()` for a column no
+  one touched. Covered by `SchemaEvolutionModelTests`.
 - `IsTemporal()` removed from an entity entirely (or the entity type removed from the model
   altogether) → **the whole history table is kept, tagged orphaned — extended to whole entity types,
   2026-09-11.** The mechanism above only orphans a *column* whose source property disappeared from an
@@ -753,7 +770,9 @@ that be done through EF Core / Npgsql public API only (golden rule 1)?** Yes.
 `HindsightMigrationsSqlGenerator` is a decorator registered (in Trigger mode) as `IMigrationsSqlGenerator`
 over the provider's own generator. In `Generate(operations, model, options)` it walks the operation
 list and injects plain `SqlOperation` entries — the trigger function + trigger after a history table's
-`CreateTableOperation`, a `DROP FUNCTION … CASCADE` before its `DropTableOperation`, and one
+`CreateTableOperation` (or after the main table's, when that comes later in the same batch: EF Core sorts
+creates by foreign-key dependency, so a main table with any foreign key follows its history table, and
+`CREATE TRIGGER … ON` it, like the D6 seed, must wait for it — `TableOrderingDdlTests`), a `DROP FUNCTION … CASCADE` before its `DropTableOperation`, and one
 `CREATE OR REPLACE FUNCTION` after any `AddColumn`/`DropColumn`/`AlterColumn`/`RenameColumn` on a
 temporal main table or its history table — then hands the rewritten list to the inner generator.
 Everything it needs (`Hindsight:IsHistoryTable`, `HistoryEntityType`, `IsTemporal`, `Orphaned`, the

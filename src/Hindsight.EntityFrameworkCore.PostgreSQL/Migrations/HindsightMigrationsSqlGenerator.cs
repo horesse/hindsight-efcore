@@ -299,8 +299,26 @@ internal sealed class HindsightMigrationsSqlGenerator(
             }
         }
 
-        foreach (var operation in operations)
+        // Where each table created in this batch is created. EF Core sorts CreateTableOperations by
+        // foreign-key dependency only: a main table with any foreign key (to another table, or to itself)
+        // is sorted after its history table, which has none. The trigger and the seed read the main table,
+        // so when it comes later they wait for it (deferredUntilMainCreated) instead of failing with
+        // "relation ... does not exist".
+        var createdAt = new Dictionary<(string?, string), int>();
+        for (var position = 0; position < operations.Count; position++)
         {
+            if (operations[position] is CreateTableOperation createTable)
+            {
+                createdAt.TryAdd((createTable.Schema, createTable.Name), position);
+            }
+        }
+
+        var deferredUntilMainCreated = new Dictionary<(string?, string), List<MigrationOperation>>();
+
+        for (var position = 0; position < operations.Count; position++)
+        {
+            var operation = operations[position];
+
             // DROP FUNCTION ... CASCADE goes out before the history table is dropped.
             if (operation is DropTableOperation drop
                 && byHistoryTable.TryGetValue((drop.Schema, drop.Name), out var dropped))
@@ -315,6 +333,12 @@ internal sealed class HindsightMigrationsSqlGenerator(
             }
 
             result.Add(operation);
+
+            if (operation is CreateTableOperation createdMain
+                && deferredUntilMainCreated.Remove((createdMain.Schema, createdMain.Name), out var waiting))
+            {
+                result.AddRange(waiting);
+            }
 
             switch (operation)
             {
@@ -357,13 +381,19 @@ internal sealed class HindsightMigrationsSqlGenerator(
                         });
                     }
 
+                    // Everything below reads the main table: right here when it already exists, otherwise
+                    // right after its own CreateTableOperation later in this batch (see createdAt).
+                    var readsMainTable = new List<MigrationOperation>();
+                    (string?, string)? mainTable = null;
+
                     if (byHistoryTable.TryGetValue((create.Schema, create.Name), out var created))
                     {
-                        result.Add(new SqlOperation
+                        mainTable = (created.MainSchema, created.MainTable);
+                        readsMainTable.Add(new SqlOperation
                         {
                             Sql = HistoryTriggerSqlGenerator.CreateFunction(created, sqlGenerationHelper),
                         });
-                        result.Add(new SqlOperation
+                        readsMainTable.Add(new SqlOperation
                         {
                             Sql = HistoryTriggerSqlGenerator.CreateTrigger(created, sqlGenerationHelper),
                         });
@@ -374,10 +404,22 @@ internal sealed class HindsightMigrationsSqlGenerator(
                     // manual workaround this automates always documented (create the table, then seed it).
                     if (byHistoryTableSeed.TryGetValue((create.Schema, create.Name), out var seed))
                     {
-                        result.Add(new SqlOperation
+                        mainTable = (seed.MainSchema, seed.MainTable);
+                        readsMainTable.Add(new SqlOperation
                         {
                             Sql = HistorySeedSqlGenerator.SeedInitialVersions(seed, sqlGenerationHelper),
                         });
+                    }
+
+                    if (mainTable is { } main
+                        && createdAt.TryGetValue(main, out var mainPosition)
+                        && mainPosition > position)
+                    {
+                        deferredUntilMainCreated[main] = readsMainTable;
+                    }
+                    else
+                    {
+                        result.AddRange(readsMainTable);
                     }
 
                     createdOrDropped.Add((create.Schema, create.Name));

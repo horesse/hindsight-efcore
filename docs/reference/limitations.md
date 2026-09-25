@@ -21,7 +21,7 @@ Each of these fails loudly, so you find out during development rather than from 
 | Removing a primary-key property of a temporal entity | `InvalidOperationException` at model build | keep it, or remove `IsTemporal()` |
 | Changing a property's store type, precision/scale, max length or converter under the same column name | `InvalidOperationException` at model build | [give it a different column name](/migrations/schema-evolution#changing-a-property-s-type) instead |
 | Database providers other than Npgsql | `InvalidOperationException` on first use | none planned |
-| Retention and partitioning of history | history grows without bound | planned for a later major version; the schema allows it without migrating existing data |
+| Retention and partitioning of history | history grows without bound | planned; the schema allows adding it without migrating existing data |
 
 ## Known trade-offs
 

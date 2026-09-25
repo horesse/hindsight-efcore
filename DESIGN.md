@@ -208,11 +208,18 @@ the four names on some other type.
 
 The public API names the change-context members after these columns, on both sides:
 `ChangeContext.ChangedBy` / `ChangedByName` go in, `Version<TEntity>.ChangedBy` / `ChangedByName` come
-out. Through 1.x the input side was `UserId` / `UserName`, so a user had to learn a mapping between
-what they wrote and what they read back; 2.0 renamed the input to match (the value is not always a
+out. Through 1.3 the input side was `UserId` / `UserName`, so a user had to learn a mapping between
+what they wrote and what they read back; 1.4 renamed the input to match (the value is not always a
 user either — a service or a job is just as valid). The columns and the trigger's session settings
 (`hindsight.changed_by*`) kept their names: they were already right, and renaming them would have
 forced a history-table migration on every existing database (golden rule 3).
+
+The old names were removed in a minor release, without an `[Obsolete]` period — a deliberate exception
+to semantic versioning, decided by the maintainer. What made it acceptable: the members are set in one
+place (the application's `IChangeContextProvider`), the break is a compile error that points at that
+line, the fix is a rename with no behavior change, and there is no database step. Package validation
+records the four removed accessors in `CompatibilitySuppressions.xml` against the 1.3.0 baseline; the
+file goes when the baseline moves past 1.4.0. The upgrade guide lists it as the one code change 1.4 needs.
 
 Indexes: `(pk columns, valid_from desc)` and GiST on `tstzrange(valid_from, valid_to)` (D14).
 No FKs from history to the main table (parent may be deleted). All `not null` / unique / check

@@ -10,16 +10,16 @@ release, see the [release notes](https://github.com/horesse/hindsight-efcore/rel
 
 Hindsight follows semantic versioning: a minor or patch release never needs a code change on your side,
 but it may add a manual database step (listed here) or start rejecting something that was silently
-wrong before.
+wrong before. The one exception is 1.4, which renames two `ChangeContext` members (below).
 
-## Upgrading to 2.0
+## Upgrading to 1.4
 
 ### `ChangeContext` members renamed to match `Version<TEntity>`
 
 The "who made the change" members of `ChangeContext` now carry the same names you read them back
 with from [`History()`](/querying/history), which are also the history column names:
 
-| 1.x `ChangeContext` | 2.0 `ChangeContext` | read back as | history column |
+| 1.3 and earlier | 1.4 | read back as | history column |
 |---|---|---|---|
 | `UserId` | `ChangedBy` | `Version<TEntity>.ChangedBy` | `changed_by` |
 | `UserName` | `ChangedByName` | `Version<TEntity>.ChangedByName` | `changed_by_name` |

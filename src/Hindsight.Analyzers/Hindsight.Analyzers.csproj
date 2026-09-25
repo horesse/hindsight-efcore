@@ -21,14 +21,23 @@
   </PropertyGroup>
 
   <!-- VersionOverride, not a central PackageVersion - see the comment in Directory.Packages.props next
-       to Microsoft.CodeAnalysis.CSharp.Analyzer.Testing for why. 5.9.0 is current stable and matches
-       the .NET 10 SDK's own Roslyn version; PrivateAssets="all" keeps both out of this project's own
-       (unused, IsPackable=false) dependency list. -->
+       to Microsoft.CodeAnalysis.CSharp.Analyzer.Testing for why. PrivateAssets="all" keeps both out of
+       this project's own (unused, IsPackable=false) dependency list.
+
+       Microsoft.CodeAnalysis.CSharp is the compiler API the analyzer is compiled against, and it is a
+       floor for every consumer: a compiler older than the referenced version refuses to load the
+       analyzer at all (CS9057, "The analyzer assembly references version X of the compiler, which is
+       newer than the currently running version Y"). 5.0.0 is the compiler of the oldest SDK that can
+       build a net10.0 project - the .NET 10.0.100 SDK (also the floor in global.json) - so do not raise
+       it for a newer API without raising that floor too. HindsightAnalyzerCompilerVersionTests guards
+       it. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" VersionOverride="5.9.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" VersionOverride="5.0.0" PrivateAssets="all" />
     <!-- Meta-analyzer for analyzer authoring: RS1xxx correctness rules, and RS2008
-         (AnalyzerReleaseTracking) enforcing AnalyzerReleases.Shipped.md / Unshipped.md below. -->
-    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" VersionOverride="5.9.0" PrivateAssets="all" />
+         (AnalyzerReleaseTracking) enforcing AnalyzerReleases.Shipped.md / Unshipped.md below. Runs only
+         while this project builds and never ships; 4.14.0 is the newest release that still loads on the
+         10.0.100 SDK's compiler (there is no 5.0.0 of this package). -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" VersionOverride="4.14.0" PrivateAssets="all" />
   </ItemGroup>
 
   <!-- Not a public API surface in the PublicAPI.txt sense (DESIGN.md D4): nothing here is a C# type a

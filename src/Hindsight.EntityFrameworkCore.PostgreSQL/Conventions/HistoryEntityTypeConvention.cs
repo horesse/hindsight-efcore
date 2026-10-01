@@ -453,6 +453,13 @@ internal sealed class HistoryEntityTypeConvention(
             target.HasConversion(providerClrType);
         }
 
+        // A converted collection or mutable value compared by reference warns (EF Core 10620) and misses in-place
+        // changes; the source's comparer is the one that knows how to compare the value, so the history column shares it.
+        if (source.GetValueComparer() is { } comparer)
+        {
+            target.HasValueComparer(comparer);
+        }
+
         if (source.GetMaxLength() is { } maxLength)
         {
             target.HasMaxLength(maxLength);

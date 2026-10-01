@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 
@@ -437,6 +438,23 @@ public sealed class HistoryEntityTypeConventionTests
         Assert.Contains("65 bytes", ex.Message);
     }
 
+    [Fact]
+    public void History_column_of_a_converted_collection_shares_the_source_value_comparer()
+    {
+        var comparer = new ValueComparer<List<string>>(
+            (a, b) => a!.SequenceEqual(b!), v => v.Count, v => v.ToList());
+        var model = BuildModel(b => b.Entity<TaggedPolicy>(e =>
+        {
+            e.Property(p => p.Tags).HasColumnType("jsonb").HasConversion(
+                v => string.Join(',', v), v => v.Split(',', StringSplitOptions.None).ToList(), comparer);
+            e.IsTemporal();
+        }));
+
+        var tags = model.HistoryEntityType(typeof(TaggedPolicy)).GetProperties().Single(p => p.ClrType == typeof(List<string>));
+
+        Assert.Same(comparer, tags.GetValueComparer());
+    }
+
     private static IModel BuildModel(Action<ModelBuilder> configure)
     {
         using var db = new TestContext(configure);
@@ -463,6 +481,13 @@ public sealed class HistoryEntityTypeConventionTests
     private sealed class MotorPolicy : Policy
     {
         public string PlateNumber { get; set; } = "";
+    }
+
+    [Table("tagged_policies")]
+    private sealed class TaggedPolicy
+    {
+        public int Id { get; set; }
+        public List<string> Tags { get; set; } = [];
     }
 
     private sealed class Keyless

@@ -32,7 +32,9 @@ shared and a non-shared entity type.
 survive because Npgsql infers them from the CLR type. The convention therefore **mirrors** each
 source property's facets onto the history property, using only public APIs:
 `GetColumnType()`, `GetValueConverter()` / `GetProviderClrType()`, `GetMaxLength()`, `IsUnicode()`,
-`GetPrecision()` / `GetScale()`. With mirroring the EF model and the PostgreSQL catalog match the main
+`GetPrecision()` / `GetScale()`, and `GetValueComparer()`: a converted collection or mutable value
+otherwise gets EF Core's reference comparer on the history side, which logs warning 10620 at model build
+and compares history values by reference. With mirroring the EF model and the PostgreSQL catalog match the main
 table exactly for every case above, including a custom `ValueConverter`. These getters only return the
 configured values once the source entity is fully configured, so the convention must run at/after
 model finalization. Covered by `PropertyBagTypeFidelitySpike` in `Hindsight.IntegrationTests`.

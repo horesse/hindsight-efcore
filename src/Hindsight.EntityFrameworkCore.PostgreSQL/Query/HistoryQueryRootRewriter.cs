@@ -32,8 +32,7 @@ namespace Hindsight.Query;
 /// </summary>
 internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 {
-    private static readonly MethodInfo _efProperty =
-        typeof(EF).GetMethod(nameof(EF.Property))!;
+    private static readonly MethodInfo _efProperty = typeof(EF).GetMethod(nameof(EF.Property))!;
 
     private static readonly MethodInfo _queryableWhere = typeof(Queryable).GetMethods()
         .Single(m => m.Name == nameof(Queryable.Where)
@@ -140,6 +139,16 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
             throw new NotSupportedException(
                 $"{operatorName} is not supported for '{sourceEntityType.DisplayName()}': it takes part in an inheritance "
                 + "hierarchy, which Hindsight does not support (DESIGN.md D9). Read the history table with FromSql.");
+        }
+
+        if (sourceEntityType.FindAnnotation(HindsightAnnotationNames.HistoryQueryFiltersUnsupported)?.Value is true)
+        {
+            var filterFailure = Conventions.HistoryEntityTypeConvention.FindUnsupportedHistoryFilter(sourceEntityType)
+                ?? "A global query filter cannot be represented on history rows.";
+            throw new NotSupportedException(
+                $"{operatorName} cannot safely apply the global query filters for '{sourceEntityType.DisplayName()}': "
+                + $"{filterFailure} Current queries remain available; remove the unsupported member from the filter "
+                + "or avoid historical queries for this entity.");
         }
 
         if (sourceEntityType.FindAnnotation(HindsightAnnotationNames.HistoryEntityType)?.Value is not string historyName)

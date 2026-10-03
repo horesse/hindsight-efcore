@@ -763,6 +763,18 @@ Revisit if: EF Core changes `IQueryExpressionInterceptor` semantics or removes t
 `EntityQueryRootExpression(IEntityType)` constructor (the `efcore-preview` canary covers this); or a
 store type appears that the `EF.Property<T>` projection cannot round-trip.
 
+**Global query filters on history (added 2026-10-03).** During model finalization, each source filter is
+copied to its property-bag history entity with entity-property accesses mapped to their versioned
+history columns. EF Core then applies its ordinary query-filter pipeline to rewritten history roots,
+including runtime binding of current `DbContext` members and `IgnoreQueryFilters` semantics. Never
+evaluate or reflect over context members in the query rewriter: doing so would embed a tenant value in
+the cached query and could return another tenant's rows. A filter that cannot be represented on the
+history property bag is recorded as a model annotation; current-data queries remain available, while
+the first historical query for that entity throws `NotSupportedException` with the filter and member.
+This avoids failing application startup when history is never queried and avoids returning an
+unfiltered or partially filtered historical result. The mapping uses public convention metadata APIs
+and does not depend on EF internals.
+
 ## D13. Trigger DDL is emitted by a decorator over `IMigrationsSqlGenerator` — resolved by spike, 2026-09-11
 
 The Trigger writer (D3) needs the migration to emit `CREATE FUNCTION` + `CREATE TRIGGER`, and to

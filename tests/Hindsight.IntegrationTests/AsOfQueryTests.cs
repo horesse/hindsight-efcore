@@ -60,6 +60,138 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task AsOf_applies_global_query_filters_using_the_historical_entity_values()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_applies_global_query_filters_using_the_historical_entity_values));
+
+        var visible = new FilteredPolicy { TenantId = 1 };
+        var hidden = new FilteredPolicy { TenantId = 2 };
+        h.Db.FilteredPolicies.AddRange(visible, hidden);
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Sql.Commands.Clear();
+        var rows = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).ToListAsync(Ct);
+
+        var only = Assert.Single(rows);
+        Assert.Equal(visible.Id, only.Id);
+        var sql = Assert.Single(h.Sql.Commands);
+        Assert.Contains("tenant_id", sql, StringComparison.Ordinal);
+        await Verify(sql, extension: "sql");
+
+        h.Db.CurrentTenantId = 2;
+        h.Sql.Commands.Clear();
+        var changedScope = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).ToListAsync(Ct);
+        var onlyChangedScope = Assert.Single(changedScope);
+        Assert.Equal(hidden.Id, onlyChangedScope.Id);
+    }
+
+    [Fact]
+    public async Task AsOf_IgnoreQueryFilters_disables_global_query_filters()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_IgnoreQueryFilters_disables_global_query_filters));
+
+        var visible = new FilteredPolicy { TenantId = 1 };
+        var hidden = new FilteredPolicy { TenantId = 2 };
+        h.Db.FilteredPolicies.AddRange(visible, hidden);
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Sql.Commands.Clear();
+        var rows = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).IgnoreQueryFilters().ToListAsync(Ct);
+
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task AsOf_IgnoreQueryFilters_can_disable_a_named_filter()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_IgnoreQueryFilters_can_disable_a_named_filter));
+
+        h.Db.FilteredPolicies.AddRange(
+            new FilteredPolicy { TenantId = 1 },
+            new FilteredPolicy { TenantId = 2 },
+            new FilteredPolicy { TenantId = 1, IsActive = false });
+        await h.Db.SaveChangesAsync(Ct);
+        h.Sql.Commands.Clear();
+
+        IReadOnlyCollection<string> ignoredFilters = ["TenantVisibility"];
+        var rows = await h.Db.FilteredPolicies
+            .AsOf(_t0.AddMinutes(1))
+            .IgnoreQueryFilters(ignoredFilters)
+            .ToListAsync(Ct);
+
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task AsOf_inside_a_subquery_applies_the_history_query_filter()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(AsOf_inside_a_subquery_applies_the_history_query_filter));
+        h.Db.FilteredPolicies.Add(new FilteredPolicy { TenantId = 2 });
+        await h.Db.SaveChangesAsync(Ct);
+
+        var count = await h.Db.Policies
+            .Where(policy => h.Db.FilteredPolicies.AsOf(_t2.AddMinutes(1)).Any())
+            .CountAsync(Ct);
+
+        Assert.Equal(0, count);
+    }
+
+    [Fact]
+    public async Task Every_historical_read_operator_applies_global_query_filters()
+    {
+        await using var h = await CreateAsync(nameof(Every_historical_read_operator_applies_global_query_filters));
+        var visible = new FilteredPolicy { TenantId = 1 };
+        h.Db.FilteredPolicies.AddRange(visible, new FilteredPolicy { TenantId = 2 });
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Time.Advance(TimeSpan.FromHours(1));
+        visible.TenantId = 3;
+        await h.Db.SaveChangesAsync(Ct);
+
+        Assert.Single(await h.Db.FilteredPolicies.AllVersions().ToListAsync(Ct));
+        Assert.Single(await h.Db.FilteredPolicies.FromTo(_t0, _t1).ToListAsync(Ct));
+        Assert.Single(await h.Db.FilteredPolicies.ContainedIn(_t0, _t1).ToListAsync(Ct));
+        Assert.Single(await h.Db.History<FilteredPolicy>().ToListAsync(Ct));
+    }
+
+    [Fact]
+    public void Filter_that_uses_an_excluded_history_property_only_rejects_historical_queries()
+    {
+        var options = new DbContextOptionsBuilder<ExcludedFilterContext>()
+            .UseNpgsql("Host=localhost;Database=unused")
+            .UseHindsight(hb => hb.UseHistoryWriter(HistoryWriter.Interceptor))
+            .Options;
+
+        using var db = new ExcludedFilterContext(options);
+        _ = db.Set<ExcludedFilteredPolicy>().ToQueryString();
+        var exception = Assert.Throws<NotSupportedException>(
+            () => db.Set<ExcludedFilteredPolicy>().AsOf(_t0).ToQueryString());
+
+        Assert.Contains("(unnamed)", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("TenantId", exception.Message, StringComparison.Ordinal);
+
+        var ignored = Assert.Throws<NotSupportedException>(
+            () => db.Set<ExcludedFilteredPolicy>().AsOf(_t0).IgnoreQueryFilters().ToQueryString());
+        Assert.Contains("(unnamed)", ignored.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Filter_that_uses_a_navigation_only_rejects_historical_queries()
+    {
+        var options = new DbContextOptionsBuilder<NavigationFilterContext>()
+            .UseNpgsql("Host=localhost;Database=unused")
+            .UseHindsight(hb => hb.UseHistoryWriter(HistoryWriter.Interceptor))
+            .Options;
+
+        using var db = new NavigationFilterContext(options);
+        _ = db.Set<NavigationFilteredPolicy>().ToQueryString();
+        var exception = Assert.Throws<NotSupportedException>(
+            () => db.Set<NavigationFilteredPolicy>().AsOf(_t0).ToQueryString());
+
+        Assert.Contains("NavigationFilteredPolicy.Owner", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there));
@@ -377,6 +509,61 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         public List<Note> Notes { get; } = [];
     }
 
+    private sealed class FilteredPolicy
+    {
+        public int Id { get; set; }
+        public int TenantId { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class TenantProvider
+    {
+        public int TenantId { get; set; } = 1;
+    }
+
+    private sealed class ExcludedFilteredPolicy
+    {
+        public int Id { get; set; }
+        public int TenantId { get; set; }
+    }
+
+    private sealed class ExcludedFilterContext(DbContextOptions<ExcludedFilterContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var entity = modelBuilder.Entity<ExcludedFilteredPolicy>();
+            entity.HasQueryFilter(policy => policy.TenantId > 0);
+            entity.IsTemporal(temporal => temporal.Exclude(policy => policy.TenantId));
+        }
+    }
+
+    private sealed class NavigationFilteredPolicy
+    {
+        public int Id { get; set; }
+        public int OwnerId { get; set; }
+        public FilterOwner Owner { get; set; } = null!;
+    }
+
+    private sealed class FilterOwner
+    {
+        public int Id { get; set; }
+        public bool IsEnabled { get; set; }
+    }
+
+    private sealed class NavigationFilterContext(DbContextOptions<NavigationFilterContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var owner = modelBuilder.Entity<FilterOwner>();
+            owner.HasKey(item => item.Id);
+
+            var entity = modelBuilder.Entity<NavigationFilteredPolicy>();
+            entity.HasOne(item => item.Owner).WithMany().HasForeignKey(item => item.OwnerId);
+            entity.HasQueryFilter(item => item.Owner.IsEnabled);
+            entity.IsTemporal();
+        }
+    }
+
     private sealed class Note
     {
         public int Id { get; set; }
@@ -401,9 +588,27 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     {
         public DbSet<Policy> Policies => Set<Policy>();
 
+        public DbSet<FilteredPolicy> FilteredPolicies => Set<FilteredPolicy>();
+
         public DbSet<Reading> Readings => Set<Reading>();
 
         public DbSet<Widget> Plain => Set<Widget>();
+
+        private int _currentTenantId = 1;
+
+        public TenantProvider TenantProvider { get; } = new();
+
+        public int CurrentTenantId
+        {
+            get => _currentTenantId;
+            set
+            {
+                _currentTenantId = value;
+                TenantProvider.TenantId = value;
+            }
+        }
+
+        public int GetTenant() => _currentTenantId;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -418,6 +623,18 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             policy.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             policy.HasMany(p => p.Notes).WithOne().HasForeignKey(n => n.PolicyId);
             policy.IsTemporal(t => t.Exclude(p => p.UpdatedAt));
+
+            var filteredPolicy = modelBuilder.Entity<FilteredPolicy>();
+            filteredPolicy.ToTable("filtered_policies");
+            filteredPolicy.Property(p => p.Id).HasColumnName("id");
+            filteredPolicy.Property(p => p.TenantId).HasColumnName("tenant_id");
+            filteredPolicy.HasQueryFilter(
+                "TenantVisibility",
+                p => p.TenantId == CurrentTenantId
+                    && p.TenantId == TenantProvider.TenantId
+                    && p.TenantId == GetTenant());
+            filteredPolicy.HasQueryFilter("ActiveOnly", p => p.IsActive);
+            filteredPolicy.IsTemporal();
 
             var note = modelBuilder.Entity<Note>();
             note.ToTable("notes");

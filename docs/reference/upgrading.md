@@ -12,6 +12,16 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before. The one exception is 1.4, which renames two `ChangeContext` members (below).
 
+## Next release
+
+### Historical queries now apply global query filters
+
+`AsOf`, `AllVersions`, `FromTo`, `ContainedIn` and `History<T>` now apply the entity's global query
+filters to stored versions. Existing historical queries may therefore return fewer rows. If a filter
+uses a member that cannot be represented in history, only a historical query for that entity throws
+`NotSupportedException`; model construction and current-data queries continue to work. Review filters
+on temporal entities before relying on historical reads. No database migration is required.
+
 ## Upgrading to 1.4.1
 
 ### Workarounds you can remove

@@ -42,6 +42,18 @@ EF Core would turn the query into an `UPDATE` of the **history table** itself an
 audit trail. Select the current rows with a normal query and run `ExecuteUpdate` or `ExecuteDelete` on
 that.
 
+## Global query filters apply to history
+
+`AsOf`, `AllVersions`, `FromTo`, `ContainedIn` and `History<T>` apply the entity's global query filters
+to each stored version. A tenant or organization filter therefore uses the historical row's values
+and EF Core reads context members at query execution, so changing the tenant on a reused context does
+not reuse the previous tenant's value. `IgnoreQueryFilters()` and named-filter overloads work on
+historical operators as they do on ordinary queries.
+
+If a filter uses an entity property that is not stored in the history table, Hindsight throws
+`NotSupportedException` when a historical query for that entity is compiled rather than silently
+skipping that filter. Model construction and current-data queries remain available.
+
 ## Temporal entities only
 
 A historical query on an entity that is not temporal throws `InvalidOperationException` naming the

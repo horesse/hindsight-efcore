@@ -141,6 +141,14 @@ internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
                 + "hierarchy, which Hindsight does not support (DESIGN.md D9). Read the history table with FromSql.");
         }
 
+        if (sourceEntityType.FindAnnotation(HindsightAnnotationNames.HistoryQueryFiltersUnsupported)?.Value is string filterFailure)
+        {
+            throw new NotSupportedException(
+                $"{operatorName} cannot safely apply the global query filters for '{sourceEntityType.DisplayName()}': "
+                + $"{filterFailure} Current queries remain available; remove the unsupported member from the filter "
+                + "or avoid historical queries for this entity.");
+        }
+
         if (sourceEntityType.FindAnnotation(HindsightAnnotationNames.HistoryEntityType)?.Value is not string historyName)
         {
             throw new InvalidOperationException(

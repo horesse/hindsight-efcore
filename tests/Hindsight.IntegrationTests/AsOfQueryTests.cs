@@ -126,15 +126,14 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     public async Task AsOf_inside_a_subquery_applies_the_history_query_filter()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(AsOf_inside_a_subquery_applies_the_history_query_filter));
-        h.Db.FilteredPolicies.Add(new FilteredPolicy { TenantId = 1 });
         h.Db.FilteredPolicies.Add(new FilteredPolicy { TenantId = 2 });
         await h.Db.SaveChangesAsync(Ct);
 
-        var policies = await h.Db.Policies
+        var count = await h.Db.Policies
             .Where(policy => h.Db.FilteredPolicies.AsOf(_t2.AddMinutes(1)).Any())
-            .ToListAsync(Ct);
+            .CountAsync(Ct);
 
-        Assert.Single(policies);
+        Assert.Equal(0, count);
     }
 
     [Fact]
@@ -156,7 +155,7 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
-    public void Filter_that_uses_an_excluded_history_property_fails_model_build()
+    public void Filter_that_uses_an_excluded_history_property_only_rejects_historical_queries()
     {
         var options = new DbContextOptionsBuilder<ExcludedFilterContext>()
             .UseNpgsql("Host=localhost;Database=unused")
@@ -164,9 +163,11 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             .Options;
 
         using var db = new ExcludedFilterContext(options);
-        var exception = Assert.Throws<NotSupportedException>(() => _ = db.Model);
+        _ = db.Set<ExcludedFilteredPolicy>().ToQueryString();
+        var exception = Assert.Throws<NotSupportedException>(
+            () => db.Set<ExcludedFilteredPolicy>().AsOf(_t0).ToQueryString());
 
-        Assert.Contains("TenantVisibility", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("(unnamed)", exception.Message, StringComparison.Ordinal);
         Assert.Contains("TenantId", exception.Message, StringComparison.Ordinal);
     }
 
@@ -511,7 +512,7 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             var entity = modelBuilder.Entity<ExcludedFilteredPolicy>();
-            entity.HasQueryFilter("TenantVisibility", policy => policy.TenantId > 0);
+            entity.HasQueryFilter(policy => policy.TenantId > 0);
             entity.IsTemporal(temporal => temporal.Exclude(policy => policy.TenantId));
         }
     }

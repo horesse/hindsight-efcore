@@ -393,21 +393,36 @@ internal sealed class HistoryEntityTypeConvention(
     // Keep filters on the history entity itself so EF's normal query-filter pipeline supplies the
     // current DbContext parameter at execution time and honors IgnoreQueryFilters (including named
     // filters). Never evaluate context members while the model or query is being compiled.
+    // An unrepresentable filter is recorded on the source instead of failing model construction: apps
+    // that only read current rows remain usable, while the historical query rewriter rejects history reads.
     private static void MirrorQueryFilters(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
     {
-        foreach (var filter in source.GetDeclaredQueryFilters())
+        var filters = new List<(string? Name, LambdaExpression Expression)>();
+        try
         {
-            var name = filter.Key;
-            var expression = filter.Expression
-                ?? throw new NotSupportedException($"Query filter '{name}' on '{source.DisplayName()}' has no expression.");
-            if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
+            foreach (var filter in source.GetDeclaredQueryFilters())
             {
-                throw new NotSupportedException($"Query filter '{name}' on '{source.DisplayName()}' must take one entity parameter and return bool.");
-            }
+                var name = filter.Key;
+                var expression = filter.Expression
+                    ?? throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' has no expression.");
+                if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
+                {
+                    throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' must take one entity parameter and return bool.");
+                }
 
-            var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
-            var body = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body)!;
-            var historyFilter = Expression.Lambda(body, bag);
+                var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
+                var body = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body)!;
+                filters.Add((name, Expression.Lambda(body, bag)));
+            }
+        }
+        catch (NotSupportedException exception)
+        {
+            source.SetAnnotation(HindsightAnnotationNames.HistoryQueryFiltersUnsupported, exception.Message);
+            return;
+        }
+
+        foreach (var (name, historyFilter) in filters)
+        {
             if (name is null)
             {
                 historyBuilder.HasQueryFilter(historyFilter, fromDataAnnotation: false);
@@ -418,6 +433,8 @@ internal sealed class HistoryEntityTypeConvention(
             }
         }
     }
+
+    private static string FilterName(string? name) => name ?? "(unnamed)";
 
     private sealed class HistoryFilterExpressionVisitor(
         IConventionEntityType source,
@@ -431,7 +448,7 @@ internal sealed class HistoryEntityTypeConvention(
         {
             if (node == sourceParameter)
             {
-                throw Unsupported("an entity expression that is not a versioned property");
+                throw Unsupported("the entity instance directly, without naming a versioned member");
             }
 
             return base.VisitParameter(node);
@@ -441,10 +458,9 @@ internal sealed class HistoryEntityTypeConvention(
         {
             if (node.Expression == sourceParameter)
             {
-                var property = source.FindProperty(node.Member.Name);
-                if (property is null)
+                if (source.FindProperty(node.Member.Name) is not { } property)
                 {
-                    return base.VisitMember(node);
+                    throw Unsupported($"member '{source.DisplayName()}.{node.Member.Name}' which is not a scalar history property");
                 }
 
                 return Property(bag, property.ClrType, property);
@@ -455,13 +471,19 @@ internal sealed class HistoryEntityTypeConvention(
 
         protected override Expression VisitMethodCall(MethodCallExpression node)
         {
+            if (node.Object == sourceParameter)
+            {
+                throw Unsupported($"entity method '{source.DisplayName()}.{node.Method.Name}()'");
+            }
+
             if (node.Method.DeclaringType == typeof(EF)
                 && node.Method.Name == nameof(EF.Property)
                 && node.Arguments[0] == sourceParameter
-                && node.Arguments[1] is ConstantExpression { Value: string propertyName }
-                && source.FindProperty(propertyName) is { } property)
+                && node.Arguments[1] is ConstantExpression { Value: string propertyName })
             {
-                return Property(bag, node.Method.GetGenericArguments()[0], property);
+                return source.FindProperty(propertyName) is { } property
+                    ? Property(bag, node.Method.GetGenericArguments()[0], property)
+                    : throw Unsupported($"property '{source.DisplayName()}.{propertyName}' which is not stored in history");
             }
 
             return base.VisitMethodCall(node);
@@ -476,7 +498,7 @@ internal sealed class HistoryEntityTypeConvention(
         }
 
         private NotSupportedException Unsupported(string member)
-            => new($"History query filter '{filterName}' on '{source.DisplayName()}' uses {member}.");
+            => new($"History query filter '{FilterName(filterName)}' on '{source.DisplayName()}' uses {member}.");
     }
 
     // DESIGN.md D15. The history entity's identity (its Name in the model, as opposed to its mapped

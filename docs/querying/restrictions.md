@@ -51,7 +51,8 @@ not reuse the previous tenant's value. `IgnoreQueryFilters()` and named-filter o
 historical operators as they do on ordinary queries.
 
 If a filter uses an entity property that is not stored in the history table, Hindsight throws
-`NotSupportedException` rather than silently skipping that filter.
+`NotSupportedException` when a historical query for that entity is compiled rather than silently
+skipping that filter. Model construction and current-data queries remain available.
 
 ## Temporal entities only
 

@@ -17,9 +17,10 @@ wrong before. The one exception is 1.4, which renames two `ChangeContext` member
 ### Historical queries now apply global query filters
 
 `AsOf`, `AllVersions`, `FromTo`, `ContainedIn` and `History<T>` now apply the entity's global query
-filters to stored versions. Existing historical queries may therefore return fewer rows, or model
-construction may throw `NotSupportedException` if a filter uses a property excluded from history.
-Review filters on temporal entities before upgrading. No database migration is required.
+filters to stored versions. Existing historical queries may therefore return fewer rows. If a filter
+uses a member that cannot be represented in history, only a historical query for that entity throws
+`NotSupportedException`; model construction and current-data queries continue to work. Review filters
+on temporal entities before relying on historical reads. No database migration is required.
 
 ## Upgrading to 1.4.1
 

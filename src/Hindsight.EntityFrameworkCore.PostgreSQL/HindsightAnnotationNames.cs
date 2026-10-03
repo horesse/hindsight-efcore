@@ -50,6 +50,9 @@ public static class HindsightAnnotationNames
     /// </summary>
     internal const string HistoryEntityType = Prefix + "HistoryEntityType";
 
+    /// <summary>Reason a temporal entity's query filters cannot be represented safely on its history rows.</summary>
+    internal const string HistoryQueryFiltersUnsupported = Prefix + "HistoryQueryFiltersUnsupported";
+
     /// <summary>
     /// Marks the generated property-bag entity type as a Hindsight history table.
     /// Value: <see langword="true"/>.

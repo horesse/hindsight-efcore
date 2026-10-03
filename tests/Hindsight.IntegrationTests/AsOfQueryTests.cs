@@ -169,6 +169,26 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
 
         Assert.Contains("(unnamed)", exception.Message, StringComparison.Ordinal);
         Assert.Contains("TenantId", exception.Message, StringComparison.Ordinal);
+
+        var ignored = Assert.Throws<NotSupportedException>(
+            () => db.Set<ExcludedFilteredPolicy>().AsOf(_t0).IgnoreQueryFilters().ToQueryString());
+        Assert.Contains("(unnamed)", ignored.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Filter_that_uses_a_navigation_only_rejects_historical_queries()
+    {
+        var options = new DbContextOptionsBuilder<NavigationFilterContext>()
+            .UseNpgsql("Host=localhost;Database=unused")
+            .UseHindsight(hb => hb.UseHistoryWriter(HistoryWriter.Interceptor))
+            .Options;
+
+        using var db = new NavigationFilterContext(options);
+        _ = db.Set<NavigationFilteredPolicy>().ToQueryString();
+        var exception = Assert.Throws<NotSupportedException>(
+            () => db.Set<NavigationFilteredPolicy>().AsOf(_t0).ToQueryString());
+
+        Assert.Contains("NavigationFilteredPolicy.Owner", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -514,6 +534,33 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             var entity = modelBuilder.Entity<ExcludedFilteredPolicy>();
             entity.HasQueryFilter(policy => policy.TenantId > 0);
             entity.IsTemporal(temporal => temporal.Exclude(policy => policy.TenantId));
+        }
+    }
+
+    private sealed class NavigationFilteredPolicy
+    {
+        public int Id { get; set; }
+        public int OwnerId { get; set; }
+        public FilterOwner Owner { get; set; } = null!;
+    }
+
+    private sealed class FilterOwner
+    {
+        public int Id { get; set; }
+        public bool IsEnabled { get; set; }
+    }
+
+    private sealed class NavigationFilterContext(DbContextOptions<NavigationFilterContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var owner = modelBuilder.Entity<FilterOwner>();
+            owner.HasKey(item => item.Id);
+
+            var entity = modelBuilder.Entity<NavigationFilteredPolicy>();
+            entity.HasOne(item => item.Owner).WithMany().HasForeignKey(item => item.OwnerId);
+            entity.HasQueryFilter(item => item.Owner.IsEnabled);
+            entity.IsTemporal();
         }
     }
 

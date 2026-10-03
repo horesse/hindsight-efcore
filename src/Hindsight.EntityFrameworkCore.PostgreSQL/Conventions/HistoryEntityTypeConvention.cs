@@ -415,9 +415,11 @@ internal sealed class HistoryEntityTypeConvention(
                 filters.Add((name, Expression.Lambda(body, bag)));
             }
         }
-        catch (NotSupportedException exception)
+        catch (NotSupportedException)
         {
-            source.SetAnnotation(HindsightAnnotationNames.HistoryQueryFiltersUnsupported, exception.Message);
+            // Filters are staged above, so none have been attached yet. The history reader checks this
+            // marker before translating any operator, including queries with IgnoreQueryFilters().
+            source.SetAnnotation(HindsightAnnotationNames.HistoryQueryFiltersUnsupported, true);
             return;
         }
 
@@ -436,8 +438,38 @@ internal sealed class HistoryEntityTypeConvention(
 
     private static string FilterName(string? name) => name ?? "(unnamed)";
 
+    internal static string? FindUnsupportedHistoryFilter(IEntityType source)
+    {
+        foreach (var filter in source.GetDeclaredQueryFilters())
+        {
+            var name = filter.Key;
+            var expression = filter.Expression;
+            if (expression is null)
+            {
+                return $"Query filter '{FilterName(name)}' on '{source.DisplayName()}' has no expression.";
+            }
+
+            if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
+            {
+                return $"Query filter '{FilterName(name)}' on '{source.DisplayName()}' must take one entity parameter and return bool.";
+            }
+
+            var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
+            try
+            {
+                _ = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body);
+            }
+            catch (NotSupportedException exception)
+            {
+                return exception.Message;
+            }
+        }
+
+        return null;
+    }
+
     private sealed class HistoryFilterExpressionVisitor(
-        IConventionEntityType source,
+        IReadOnlyEntityType source,
         ParameterExpression sourceParameter,
         ParameterExpression bag,
         string? filterName) : ExpressionVisitor

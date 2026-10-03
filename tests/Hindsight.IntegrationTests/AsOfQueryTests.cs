@@ -495,6 +495,11 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         public bool IsActive { get; set; } = true;
     }
 
+    private sealed class TenantProvider
+    {
+        public int TenantId { get; set; } = 1;
+    }
+
     private sealed class ExcludedFilteredPolicy
     {
         public int Id { get; set; }
@@ -541,7 +546,21 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
 
         public DbSet<Widget> Plain => Set<Widget>();
 
-        public int CurrentTenantId { get; set; } = 1;
+        private int _currentTenantId = 1;
+
+        public TenantProvider TenantProvider { get; } = new();
+
+        public int CurrentTenantId
+        {
+            get => _currentTenantId;
+            set
+            {
+                _currentTenantId = value;
+                TenantProvider.TenantId = value;
+            }
+        }
+
+        public int GetTenant() => _currentTenantId;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -561,7 +580,11 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             filteredPolicy.ToTable("filtered_policies");
             filteredPolicy.Property(p => p.Id).HasColumnName("id");
             filteredPolicy.Property(p => p.TenantId).HasColumnName("tenant_id");
-            filteredPolicy.HasQueryFilter("TenantVisibility", p => p.TenantId == CurrentTenantId);
+            filteredPolicy.HasQueryFilter(
+                "TenantVisibility",
+                p => p.TenantId == CurrentTenantId
+                    && p.TenantId == TenantProvider.TenantId
+                    && p.TenantId == GetTenant());
             filteredPolicy.HasQueryFilter("ActiveOnly", p => p.IsActive);
             filteredPolicy.IsTemporal();
 

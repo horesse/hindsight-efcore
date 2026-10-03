@@ -555,7 +555,7 @@ internal sealed class HistoryEntityTypeConvention(
             // History drops every NOT NULL constraint of the original (DESIGN.md D5): old versions of a
             // removed column must still be storable, and a writer may not populate every column. Map
             // value types as Nullable<T> so the column can actually be null.
-            var historyProperty = historyBuilder.Property(AsNullable(property.ClrType), columnName);
+            var historyProperty = MirrorProperty(historyBuilder, property, AsNullable(property.ClrType), columnName);
             if (historyProperty is null)
             {
                 continue;
@@ -760,7 +760,7 @@ internal sealed class HistoryEntityTypeConvention(
             }
 
             // Match MirrorEntityColumns: the property-bag property is named after its column.
-            var restored = historyBuilder.Property(snapshotProperty.ClrType, columnName);
+            var restored = MirrorProperty(historyBuilder, snapshotProperty, snapshotProperty.ClrType, columnName);
             if (restored is null)
             {
                 continue;
@@ -840,7 +840,7 @@ internal sealed class HistoryEntityTypeConvention(
                 continue;
             }
 
-            var restored = historyBuilder.Property(snapshotProperty.ClrType, columnName);
+            var restored = MirrorProperty(historyBuilder, snapshotProperty, snapshotProperty.ClrType, columnName);
             if (restored is null)
             {
                 continue;
@@ -1032,6 +1032,23 @@ internal sealed class HistoryEntityTypeConvention(
 
     /// <summary>The name of the version index for a history table: <c>ix_&lt;history_table&gt;_version</c>.</summary>
     private static string VersionIndexName(string historyTable) => "ix_" + historyTable + "_version";
+
+    // A primitive collection (a PostgreSQL array, say) stays one in history: mapped as a plain scalar, its column keeps
+    // the store type but EF Core cannot query into it, so a global query filter using Contains on it would not translate.
+    private static IConventionPropertyBuilder? MirrorProperty(
+        IConventionEntityTypeBuilder historyBuilder,
+        IReadOnlyProperty source,
+        Type clrType,
+        string columnName)
+    {
+        var builder = historyBuilder.Property(clrType, columnName);
+        if (builder is not null && source.GetElementType() is { } elementType)
+        {
+            builder.Metadata.SetElementType(elementType.ClrType);
+        }
+
+        return builder;
+    }
 
     private static Type AsNullable(Type clrType)
         => clrType.IsValueType && Nullable.GetUnderlyingType(clrType) is null

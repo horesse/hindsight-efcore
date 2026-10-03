@@ -34,7 +34,10 @@ source property's facets onto the history property, using only public APIs:
 `GetColumnType()`, `GetValueConverter()` / `GetProviderClrType()`, `GetMaxLength()`, `IsUnicode()`,
 `GetPrecision()` / `GetScale()`, and `GetValueComparer()`: a converted collection or mutable value
 otherwise gets EF Core's reference comparer on the history side, which logs warning 10620 at model build
-and compares history values by reference. With mirroring the EF model and the PostgreSQL catalog match the main
+and compares history values by reference. A primitive collection also keeps its element type
+(`IConventionProperty.SetElementType`): the column type alone survives without it, but EF Core then treats the array
+as an opaque scalar, and a global query filter applied to history (`p.PartnerIds.Contains(id)`) does not translate.
+With mirroring the EF model and the PostgreSQL catalog match the main
 table exactly for every case above, including a custom `ValueConverter`. These getters only return the
 configured values once the source entity is fully configured, so the convention must run at/after
 model finalization. Covered by `PropertyBagTypeFidelitySpike` in `Hindsight.IntegrationTests`.

@@ -48,7 +48,8 @@ that.
 to each stored version. A tenant or organization filter therefore uses the historical row's values
 and EF Core reads context members at query execution, so changing the tenant on a reused context does
 not reuse the previous tenant's value. `IgnoreQueryFilters()` and named-filter overloads work on
-historical operators as they do on ordinary queries.
+historical operators as they do on ordinary queries. A filter over a primitive collection, such as an array
+of partner ids tested with `Contains`, translates on history as it does on the main table.
 
 If a filter uses an entity property that is not stored in the history table, Hindsight throws
 `NotSupportedException` when a historical query for that entity is compiled rather than silently

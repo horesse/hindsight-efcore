@@ -86,6 +86,23 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task AsOf_applies_a_global_query_filter_over_an_array_column()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_applies_a_global_query_filter_over_an_array_column));
+
+        var shared = new SharedPolicy { SharedWith = [7, 8] };
+        var other = new SharedPolicy { SharedWith = [9] };
+        h.Db.SharedPolicies.AddRange(shared, other);
+        await h.Db.SaveChangesAsync(Ct);
+
+        var rows = await h.Db.SharedPolicies.AsOf(_t0.AddMinutes(1)).ToListAsync(Ct);
+        var versions = await h.Db.History<SharedPolicy>().ToListAsync(Ct);
+
+        Assert.Equal(shared.Id, Assert.Single(rows).Id);
+        Assert.Equal(shared.Id, Assert.Single(versions).Entity.Id);
+    }
+
+    [Fact]
     public async Task AsOf_IgnoreQueryFilters_disables_global_query_filters()
     {
         await using var h = await CreateAsync(nameof(AsOf_IgnoreQueryFilters_disables_global_query_filters));
@@ -516,6 +533,12 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         public bool IsActive { get; set; } = true;
     }
 
+    private sealed class SharedPolicy
+    {
+        public int Id { get; set; }
+        public long[] SharedWith { get; set; } = [];
+    }
+
     private sealed class TenantProvider
     {
         public int TenantId { get; set; } = 1;
@@ -590,6 +613,8 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
 
         public DbSet<FilteredPolicy> FilteredPolicies => Set<FilteredPolicy>();
 
+        public DbSet<SharedPolicy> SharedPolicies => Set<SharedPolicy>();
+
         public DbSet<Reading> Readings => Set<Reading>();
 
         public DbSet<Widget> Plain => Set<Widget>();
@@ -609,6 +634,8 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         }
 
         public int GetTenant() => _currentTenantId;
+
+        public long CurrentPartnerId { get; set; } = 7;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -635,6 +662,13 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
                     && p.TenantId == GetTenant());
             filteredPolicy.HasQueryFilter("ActiveOnly", p => p.IsActive);
             filteredPolicy.IsTemporal();
+
+            var sharedPolicy = modelBuilder.Entity<SharedPolicy>();
+            sharedPolicy.ToTable("shared_policies");
+            sharedPolicy.Property(p => p.Id).HasColumnName("id");
+            sharedPolicy.PrimitiveCollection(p => p.SharedWith).HasColumnName("shared_with");
+            sharedPolicy.HasQueryFilter(p => p.SharedWith.Contains(CurrentPartnerId));
+            sharedPolicy.IsTemporal();
 
             var note = modelBuilder.Entity<Note>();
             note.ToTable("notes");

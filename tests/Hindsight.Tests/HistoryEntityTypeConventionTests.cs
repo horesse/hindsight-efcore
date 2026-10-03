@@ -455,6 +455,21 @@ public sealed class HistoryEntityTypeConventionTests
         Assert.Same(comparer, tags.GetValueComparer());
     }
 
+    [Fact]
+    public void History_column_of_a_primitive_collection_stays_a_primitive_collection()
+    {
+        var model = BuildModel(b => b.Entity<SharedPolicy>(e =>
+        {
+            e.PrimitiveCollection(p => p.SharedWith);
+            e.IsTemporal();
+        }));
+
+        var sharedWith = model.HistoryEntityType(typeof(SharedPolicy)).GetProperties().Single(p => p.ClrType == typeof(long[]));
+
+        Assert.True(sharedWith.IsPrimitiveCollection);
+        Assert.Equal(typeof(long), sharedWith.GetElementType()?.ClrType);
+    }
+
     private static IModel BuildModel(Action<ModelBuilder> configure)
     {
         using var db = new TestContext(configure);
@@ -481,6 +496,13 @@ public sealed class HistoryEntityTypeConventionTests
     private sealed class MotorPolicy : Policy
     {
         public string PlateNumber { get; set; } = "";
+    }
+
+    [Table("shared_policies")]
+    private sealed class SharedPolicy
+    {
+        public int Id { get; set; }
+        public long[] SharedWith { get; set; } = [];
     }
 
     [Table("tagged_policies")]

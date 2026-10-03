@@ -138,6 +138,39 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task Every_historical_read_operator_applies_global_query_filters()
+    {
+        await using var h = await CreateAsync(nameof(Every_historical_read_operator_applies_global_query_filters));
+        var visible = new FilteredPolicy { TenantId = 1 };
+        h.Db.FilteredPolicies.AddRange(visible, new FilteredPolicy { TenantId = 2 });
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Time.Advance(TimeSpan.FromHours(1));
+        visible.TenantId = 3;
+        await h.Db.SaveChangesAsync(Ct);
+
+        Assert.Single(await h.Db.FilteredPolicies.AllVersions().ToListAsync(Ct));
+        Assert.Single(await h.Db.FilteredPolicies.FromTo(_t0, _t1).ToListAsync(Ct));
+        Assert.Single(await h.Db.FilteredPolicies.ContainedIn(_t0, _t1).ToListAsync(Ct));
+        Assert.Single(await h.Db.History<FilteredPolicy>().ToListAsync(Ct));
+    }
+
+    [Fact]
+    public void Filter_that_uses_an_excluded_history_property_fails_model_build()
+    {
+        var options = new DbContextOptionsBuilder<ExcludedFilterContext>()
+            .UseNpgsql("Host=localhost;Database=unused")
+            .UseHindsight(hb => hb.UseHistoryWriter(HistoryWriter.Interceptor))
+            .Options;
+
+        using var db = new ExcludedFilterContext(options);
+        var exception = Assert.Throws<NotSupportedException>(() => _ = db.Model);
+
+        Assert.Contains("TenantVisibility", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("TenantId", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there));
@@ -460,6 +493,22 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         public int Id { get; set; }
         public int TenantId { get; set; }
         public bool IsActive { get; set; } = true;
+    }
+
+    private sealed class ExcludedFilteredPolicy
+    {
+        public int Id { get; set; }
+        public int TenantId { get; set; }
+    }
+
+    private sealed class ExcludedFilterContext(DbContextOptions<ExcludedFilterContext> options) : DbContext(options)
+    {
+        protected override void OnModelCreating(ModelBuilder modelBuilder)
+        {
+            var entity = modelBuilder.Entity<ExcludedFilteredPolicy>();
+            entity.HasQueryFilter("TenantVisibility", policy => policy.TenantId > 0);
+            entity.IsTemporal(temporal => temporal.Exclude(policy => policy.TenantId));
+        }
     }
 
     private sealed class Note

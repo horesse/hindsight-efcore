@@ -12,7 +12,7 @@ Hindsight follows semantic versioning: a minor or patch release never needs a co
 but it may add a manual database step (listed here) or start rejecting something that was silently
 wrong before. The one exception is 1.4, which renames two `ChangeContext` members (below).
 
-## Next release
+## Upgrading to 1.4.2
 
 ### Historical queries now apply global query filters
 

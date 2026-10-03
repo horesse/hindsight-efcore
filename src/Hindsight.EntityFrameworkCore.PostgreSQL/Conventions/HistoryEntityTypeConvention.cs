@@ -397,23 +397,10 @@ internal sealed class HistoryEntityTypeConvention(
     // that only read current rows remain usable, while the historical query rewriter rejects history reads.
     private static void MirrorQueryFilters(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
     {
-        var filters = new List<(string? Name, LambdaExpression Expression)>();
+        List<(string? Name, LambdaExpression Expression)> filters;
         try
         {
-            foreach (var filter in source.GetDeclaredQueryFilters())
-            {
-                var name = filter.Key;
-                var expression = filter.Expression
-                    ?? throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' has no expression.");
-                if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
-                {
-                    throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' must take one entity parameter and return bool.");
-                }
-
-                var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
-                var body = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body)!;
-                filters.Add((name, Expression.Lambda(body, bag)));
-            }
+            filters = RewriteQueryFilters(source);
         }
         catch (NotSupportedException)
         {
@@ -438,34 +425,38 @@ internal sealed class HistoryEntityTypeConvention(
 
     private static string FilterName(string? name) => name ?? "(unnamed)";
 
-    internal static string? FindUnsupportedHistoryFilter(IEntityType source)
+    private static List<(string? Name, LambdaExpression Expression)> RewriteQueryFilters(IReadOnlyEntityType source)
     {
+        var filters = new List<(string? Name, LambdaExpression Expression)>();
         foreach (var filter in source.GetDeclaredQueryFilters())
         {
             var name = filter.Key;
-            var expression = filter.Expression;
-            if (expression is null)
-            {
-                return $"Query filter '{FilterName(name)}' on '{source.DisplayName()}' has no expression.";
-            }
-
+            var expression = filter.Expression
+                ?? throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' has no expression.");
             if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
             {
-                return $"Query filter '{FilterName(name)}' on '{source.DisplayName()}' must take one entity parameter and return bool.";
+                throw new NotSupportedException($"Query filter '{FilterName(name)}' on '{source.DisplayName()}' must take one entity parameter and return bool.");
             }
 
             var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
-            try
-            {
-                _ = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body);
-            }
-            catch (NotSupportedException exception)
-            {
-                return exception.Message;
-            }
+            var body = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body)!;
+            filters.Add((name, Expression.Lambda(body, bag)));
         }
 
-        return null;
+        return filters;
+    }
+
+    internal static string? FindUnsupportedHistoryFilter(IEntityType source)
+    {
+        try
+        {
+            _ = RewriteQueryFilters(source);
+            return null;
+        }
+        catch (NotSupportedException exception)
+        {
+            return exception.Message;
+        }
     }
 
     private sealed class HistoryFilterExpressionVisitor(

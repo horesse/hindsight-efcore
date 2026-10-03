@@ -60,6 +60,65 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     }
 
     [Fact]
+    public async Task AsOf_applies_global_query_filters_using_the_historical_entity_values()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_applies_global_query_filters_using_the_historical_entity_values));
+
+        var visible = new FilteredPolicy { TenantId = 1 };
+        var hidden = new FilteredPolicy { TenantId = 2 };
+        h.Db.FilteredPolicies.AddRange(visible, hidden);
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Sql.Commands.Clear();
+        var rows = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).ToListAsync(Ct);
+
+        var only = Assert.Single(rows);
+        Assert.Equal(visible.Id, only.Id);
+        var sql = Assert.Single(h.Sql.Commands);
+        Assert.Contains("tenant_id", sql, StringComparison.Ordinal);
+
+        h.Db.CurrentTenantId = 2;
+        h.Sql.Commands.Clear();
+        var changedScope = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).SingleAsync(Ct);
+        Assert.Equal(hidden.Id, changedScope.Id);
+    }
+
+    [Fact]
+    public async Task AsOf_IgnoreQueryFilters_disables_global_query_filters()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_IgnoreQueryFilters_disables_global_query_filters));
+
+        var visible = new FilteredPolicy { TenantId = 1 };
+        var hidden = new FilteredPolicy { TenantId = 2 };
+        h.Db.FilteredPolicies.AddRange(visible, hidden);
+        await h.Db.SaveChangesAsync(Ct);
+
+        h.Sql.Commands.Clear();
+        var rows = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).IgnoreQueryFilters().ToListAsync(Ct);
+
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task AsOf_IgnoreQueryFilters_can_disable_a_named_filter()
+    {
+        await using var h = await CreateAsync(nameof(AsOf_IgnoreQueryFilters_can_disable_a_named_filter));
+
+        h.Db.FilteredPolicies.AddRange(
+            new FilteredPolicy { TenantId = 1 },
+            new FilteredPolicy { TenantId = 2 });
+        await h.Db.SaveChangesAsync(Ct);
+        h.Sql.Commands.Clear();
+
+        var rows = await h.Db.FilteredPolicies
+            .AsOf(_t0.AddMinutes(1))
+            .IgnoreQueryFilters(["TenantVisibility"])
+            .ToListAsync(Ct);
+
+        Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
     public async Task AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there()
     {
         await using var h = await SeedThreeVersionsAsync(nameof(AsOf_exactly_on_a_version_boundary_returns_the_version_that_opens_there));
@@ -377,6 +436,12 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         public List<Note> Notes { get; } = [];
     }
 
+    private sealed class FilteredPolicy
+    {
+        public int Id { get; set; }
+        public int TenantId { get; set; }
+    }
+
     private sealed class Note
     {
         public int Id { get; set; }
@@ -401,9 +466,13 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     {
         public DbSet<Policy> Policies => Set<Policy>();
 
+        public DbSet<FilteredPolicy> FilteredPolicies => Set<FilteredPolicy>();
+
         public DbSet<Reading> Readings => Set<Reading>();
 
         public DbSet<Widget> Plain => Set<Widget>();
+
+        public int CurrentTenantId { get; set; } = 1;
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -418,6 +487,13 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             policy.Property(p => p.UpdatedAt).HasColumnName("updated_at");
             policy.HasMany(p => p.Notes).WithOne().HasForeignKey(n => n.PolicyId);
             policy.IsTemporal(t => t.Exclude(p => p.UpdatedAt));
+
+            var filteredPolicy = modelBuilder.Entity<FilteredPolicy>();
+            filteredPolicy.ToTable("filtered_policies");
+            filteredPolicy.Property(p => p.Id).HasColumnName("id");
+            filteredPolicy.Property(p => p.TenantId).HasColumnName("tenant_id");
+            filteredPolicy.HasQueryFilter("TenantVisibility", p => p.TenantId == CurrentTenantId);
+            filteredPolicy.IsTemporal();
 
             var note = modelBuilder.Entity<Note>();
             note.ToTable("notes");

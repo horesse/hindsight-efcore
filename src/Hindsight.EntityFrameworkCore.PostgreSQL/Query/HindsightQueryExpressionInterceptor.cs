@@ -63,7 +63,7 @@ internal sealed class HindsightQueryExpressionInterceptor : IQueryExpressionInte
                 "Historical query (AsOf / AllVersions / FromTo / ContainedIn / History<T>): the query has no "
                 + "DbContext model to resolve the history table from.");
 
-        var rewriter = new HistoryQueryRootRewriter(model);
+        var rewriter = new HistoryQueryRootRewriter(model, eventData.Context);
         var rewritten = rewriter.Visit(queryExpression);
 
         // D7: mark the reconstructed instances this query hands back so a later SaveChanges that

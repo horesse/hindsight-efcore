@@ -45,9 +45,10 @@ that.
 ## Global query filters apply to history
 
 `AsOf`, `AllVersions`, `FromTo`, `ContainedIn` and `History<T>` apply the entity's global query filters
-to each stored version. A tenant or organization filter therefore uses the historical row's values,
-along with any values captured from the current `DbContext`. Use `IgnoreQueryFilters()` after the
-historical operator only when bypassing those filters is intentional.
+to each stored version. A tenant or organization filter therefore uses the historical row's values
+and EF Core reads context members at query execution, so changing the tenant on a reused context does
+not reuse the previous tenant's value. `IgnoreQueryFilters()` and named-filter overloads work on
+historical operators as they do on ordinary queries.
 
 If a filter uses an entity property that is not stored in the history table, Hindsight throws
 `NotSupportedException` rather than silently skipping that filter.

@@ -76,11 +76,13 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
         Assert.Equal(visible.Id, only.Id);
         var sql = Assert.Single(h.Sql.Commands);
         Assert.Contains("tenant_id", sql, StringComparison.Ordinal);
+        await Verify(sql, extension: "sql");
 
         h.Db.CurrentTenantId = 2;
         h.Sql.Commands.Clear();
-        var changedScope = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).SingleAsync(Ct);
-        Assert.Equal(hidden.Id, changedScope.Id);
+        var changedScope = await h.Db.FilteredPolicies.AsOf(_t0.AddMinutes(1)).ToListAsync(Ct);
+        var onlyChangedScope = Assert.Single(changedScope);
+        Assert.Equal(hidden.Id, onlyChangedScope.Id);
     }
 
     [Fact]
@@ -106,16 +108,33 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
 
         h.Db.FilteredPolicies.AddRange(
             new FilteredPolicy { TenantId = 1 },
-            new FilteredPolicy { TenantId = 2 });
+            new FilteredPolicy { TenantId = 2 },
+            new FilteredPolicy { TenantId = 1, IsActive = false });
         await h.Db.SaveChangesAsync(Ct);
         h.Sql.Commands.Clear();
 
+        IReadOnlyCollection<string> ignoredFilters = ["TenantVisibility"];
         var rows = await h.Db.FilteredPolicies
             .AsOf(_t0.AddMinutes(1))
-            .IgnoreQueryFilters(["TenantVisibility"])
+            .IgnoreQueryFilters(ignoredFilters)
             .ToListAsync(Ct);
 
         Assert.Equal(2, rows.Count);
+    }
+
+    [Fact]
+    public async Task AsOf_inside_a_subquery_applies_the_history_query_filter()
+    {
+        await using var h = await SeedThreeVersionsAsync(nameof(AsOf_inside_a_subquery_applies_the_history_query_filter));
+        h.Db.FilteredPolicies.Add(new FilteredPolicy { TenantId = 1 });
+        h.Db.FilteredPolicies.Add(new FilteredPolicy { TenantId = 2 });
+        await h.Db.SaveChangesAsync(Ct);
+
+        var policies = await h.Db.Policies
+            .Where(policy => h.Db.FilteredPolicies.AsOf(_t2.AddMinutes(1)).Any())
+            .ToListAsync(Ct);
+
+        Assert.Single(policies);
     }
 
     [Fact]
@@ -440,6 +459,7 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
     {
         public int Id { get; set; }
         public int TenantId { get; set; }
+        public bool IsActive { get; set; } = true;
     }
 
     private sealed class Note
@@ -493,6 +513,7 @@ public sealed class AsOfQueryTests(PostgresFixture postgres)
             filteredPolicy.Property(p => p.Id).HasColumnName("id");
             filteredPolicy.Property(p => p.TenantId).HasColumnName("tenant_id");
             filteredPolicy.HasQueryFilter("TenantVisibility", p => p.TenantId == CurrentTenantId);
+            filteredPolicy.HasQueryFilter("ActiveOnly", p => p.IsActive);
             filteredPolicy.IsTemporal();
 
             var note = modelBuilder.Entity<Note>();

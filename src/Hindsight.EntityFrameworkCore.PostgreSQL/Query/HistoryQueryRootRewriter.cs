@@ -30,11 +30,9 @@ namespace Hindsight.Query;
 /// (DESIGN.md D12). Uses only public EF Core API — no <c>Microsoft.EntityFrameworkCore.*.Internal</c> —
 /// so this stays working across EF Core minor releases instead of breaking on an internal API change.
 /// </summary>
-internal sealed class HistoryQueryRootRewriter(IModel model, DbContext context) : ExpressionVisitor
+internal sealed class HistoryQueryRootRewriter(IModel model) : ExpressionVisitor
 {
-    private static readonly MethodInfo _efProperty =
-        typeof(EF).GetMethod(nameof(EF.Property))!;
-
+    private static readonly MethodInfo _efProperty = typeof(EF).GetMethod(nameof(EF.Property))!;
 
     private static readonly MethodInfo _queryableWhere = typeof(Queryable).GetMethods()
         .Single(m => m.Name == nameof(Queryable.Where)
@@ -72,8 +70,6 @@ internal sealed class HistoryQueryRootRewriter(IModel model, DbContext context) 
     // entity from one that merely uses a history query in a subquery, so it can tag the former for
     // the save-back guard (DESIGN.md D7) without a wrapper inside the projection.
     private readonly Dictionary<Expression, Type> _rewrittenMarkers = new(ReferenceEqualityComparer.Instance);
-    private bool _ignoreAllQueryFilters;
-    private readonly HashSet<string> _ignoredQueryFilters = new(StringComparer.Ordinal);
 
     /// <summary>The rewritten <c>AsOf</c> / <c>AllVersions</c> / <c>History&lt;T&gt;</c> nodes in the visited
     /// tree, mapped to the CLR type each yields.</summary>
@@ -82,37 +78,6 @@ internal sealed class HistoryQueryRootRewriter(IModel model, DbContext context) 
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
         ArgumentNullException.ThrowIfNull(node);
-
-        if (node.Method.DeclaringType == typeof(EntityFrameworkQueryableExtensions)
-            && node.Method.Name == nameof(EntityFrameworkQueryableExtensions.IgnoreQueryFilters))
-        {
-            var wasIgnoringAll = _ignoreAllQueryFilters;
-            var filtersBefore = _ignoredQueryFilters.ToArray();
-            if (node.Arguments.Count == 1)
-            {
-                _ignoreAllQueryFilters = true;
-            }
-            else if (TryReadFilterNames(node.Arguments[1], out var names))
-            {
-                _ignoredQueryFilters.UnionWith(names);
-            }
-            else
-            {
-                throw new NotSupportedException(
-                    "IgnoreQueryFilters(filterNames) requires a constant filter-name collection on a historical query.");
-            }
-
-            try
-            {
-                return base.VisitMethodCall(node);
-            }
-            finally
-            {
-                _ignoreAllQueryFilters = wasIgnoringAll;
-                _ignoredQueryFilters.Clear();
-                _ignoredQueryFilters.UnionWith(filtersBefore);
-            }
-        }
 
         if (node.Method.IsGenericMethod)
         {
@@ -239,8 +204,6 @@ internal sealed class HistoryQueryRootRewriter(IModel model, DbContext context) 
             _ => HistorySource(historyRoot, bagType, periodStart),
         };
 
-        historySource = ApplyQueryFilters(historySource, sourceEntityType, bagType, operatorName);
-
         // h => new TEntity { Prop = EF.Property<TProp>(h, "column"), ... }
         var projectionParam = Expression.Parameter(bagType, "h");
         var entityInit = Expression.MemberInit(
@@ -261,137 +224,6 @@ internal sealed class HistoryQueryRootRewriter(IModel model, DbContext context) 
         var rewritten = Expression.Call(_asNoTracking.MakeGenericMethod(resultClrType), projected);
         _rewrittenMarkers[rewritten] = resultClrType;
         return rewritten;
-    }
-
-    private MethodCallExpression ApplyQueryFilters(
-        MethodCallExpression historySource,
-        IEntityType sourceEntityType,
-        Type bagType,
-        string operatorName)
-    {
-        if (_ignoreAllQueryFilters)
-        {
-            return historySource;
-        }
-
-        var filters = sourceEntityType.GetDeclaredQueryFilters()
-            .Where(filter => filter.Key is null || !_ignoredQueryFilters.Contains(filter.Key))
-            .Select(filter => filter.Expression
-                ?? throw new NotSupportedException(
-                    $"{operatorName} cannot apply query filter '{filter.Key}' for '{sourceEntityType.DisplayName()}': "
-                    + "the filter expression is missing."))
-            .ToArray();
-        if (filters.Length == 0)
-        {
-            return historySource;
-        }
-
-        var bag = Expression.Parameter(bagType, "h");
-        Expression body = Expression.Constant(true);
-        foreach (var filter in filters)
-        {
-            if (filter.Parameters.Count != 1 || filter.ReturnType != typeof(bool))
-            {
-                throw new NotSupportedException(
-                    $"{operatorName} cannot apply the query filter for '{sourceEntityType.DisplayName()}': "
-                    + "the filter must take one entity parameter and return bool.");
-            }
-
-            body = Expression.AndAlso(
-                body,
-                new QueryFilterPropertyRewriter(sourceEntityType, context, filter.Parameters[0], bag, operatorName)
-                    .Visit(filter.Body)!);
-        }
-
-        return Expression.Call(
-            _queryableWhere.MakeGenericMethod(bagType),
-            historySource,
-            Expression.Quote(Expression.Lambda(body, bag)));
-    }
-
-    private static bool TryReadFilterNames(Expression expression, out string[] names)
-    {
-        if (expression is ConstantExpression { Value: IEnumerable<string> values })
-        {
-            names = values.ToArray();
-            return true;
-        }
-
-        if (expression is NewArrayExpression array
-            && array.Expressions.All(item => item is ConstantExpression { Value: string }))
-        {
-            names = array.Expressions.Cast<ConstantExpression>().Select(item => (string)item.Value!).ToArray();
-            return true;
-        }
-
-        names = [];
-        return false;
-    }
-
-    private sealed class QueryFilterPropertyRewriter(
-        IEntityType entityType,
-        DbContext context,
-        ParameterExpression entity,
-        ParameterExpression bag,
-        string operatorName) : ExpressionVisitor
-    {
-        protected override Expression VisitParameter(ParameterExpression node)
-        {
-            if (node == entity)
-            {
-                throw new NotSupportedException(
-                    $"{operatorName} cannot safely apply a query filter for '{entityType.DisplayName()}': "
-                    + "the filter uses an entity member that is not stored as a history column.");
-            }
-
-            return base.VisitParameter(node);
-        }
-
-        protected override Expression VisitMember(MemberExpression node)
-        {
-            if (node.Expression == entity && entityType.FindProperty(node.Member.Name) is { } property)
-            {
-                return Property(bag, property.ClrType, HistoryColumn(property));
-            }
-
-            if (node.Expression is ConstantExpression { Value: DbContext })
-            {
-                var value = node.Member switch
-                {
-                    System.Reflection.PropertyInfo propertyInfo => propertyInfo.GetValue(context),
-                    System.Reflection.FieldInfo fieldInfo => fieldInfo.GetValue(context),
-                    _ => throw new NotSupportedException(
-                        $"{operatorName} cannot read query-filter context member '{node.Member.Name}'."),
-                };
-                return Expression.Constant(value, node.Type);
-            }
-
-            return base.VisitMember(node);
-        }
-
-        protected override Expression VisitMethodCall(MethodCallExpression node)
-        {
-            if (node.Method.DeclaringType == typeof(EF)
-                && node.Method.Name == nameof(EF.Property)
-                && node.Arguments[0] == entity
-                && node.Arguments[1] is ConstantExpression { Value: string propertyName }
-                && entityType.FindProperty(propertyName) is { } property)
-            {
-                return Property(bag, node.Method.GetGenericArguments()[0], HistoryColumn(property));
-            }
-
-            return base.VisitMethodCall(node);
-        }
-
-        private string HistoryColumn(IProperty property)
-        {
-            var column = VersionedColumns.Collect(entityType)
-                .FirstOrDefault(candidate => ReferenceEquals(candidate.Property, property));
-            return column?.Column
-                ?? throw new NotSupportedException(
-                    $"{operatorName} cannot safely apply a query filter that uses '{entityType.DisplayName()}.{property.Name}': "
-                    + "the property is not stored in the history table. Remove it from the filter or use a query without history.");
-        }
     }
 
     // h => new Version<TEntity>

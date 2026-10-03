@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+using System.Reflection;
 using System.Text;
 using Hindsight.Migrations;
 using Microsoft.EntityFrameworkCore;
@@ -384,7 +386,97 @@ internal sealed class HistoryEntityTypeConvention(
         AddDbSessionUserColumn(historyBuilder, source);
         AddSurrogateKey(historyBuilder);
         AddVersionIndex(historyBuilder, source);
+        MirrorQueryFilters(historyBuilder, source);
         return historyBuilder;
+    }
+
+    // Keep filters on the history entity itself so EF's normal query-filter pipeline supplies the
+    // current DbContext parameter at execution time and honors IgnoreQueryFilters (including named
+    // filters). Never evaluate context members while the model or query is being compiled.
+    private static void MirrorQueryFilters(IConventionEntityTypeBuilder historyBuilder, IConventionEntityType source)
+    {
+        foreach (var filter in source.GetDeclaredQueryFilters())
+        {
+            var name = filter.Key;
+            var expression = filter.Expression
+                ?? throw new NotSupportedException($"Query filter '{name}' on '{source.DisplayName()}' has no expression.");
+            if (expression.Parameters.Count != 1 || expression.ReturnType != typeof(bool))
+            {
+                throw new NotSupportedException($"Query filter '{name}' on '{source.DisplayName()}' must take one entity parameter and return bool.");
+            }
+
+            var bag = Expression.Parameter(typeof(Dictionary<string, object>), "history");
+            var body = new HistoryFilterExpressionVisitor(source, expression.Parameters[0], bag, name).Visit(expression.Body)!;
+            var historyFilter = Expression.Lambda(body, bag);
+            if (name is null)
+            {
+                historyBuilder.HasQueryFilter(historyFilter, fromDataAnnotation: false);
+            }
+            else
+            {
+                historyBuilder.HasQueryFilter(name, historyFilter, fromDataAnnotation: false);
+            }
+        }
+    }
+
+    private sealed class HistoryFilterExpressionVisitor(
+        IConventionEntityType source,
+        ParameterExpression sourceParameter,
+        ParameterExpression bag,
+        string? filterName) : ExpressionVisitor
+    {
+        private static readonly MethodInfo _efProperty = typeof(EF).GetMethod(nameof(EF.Property))!;
+
+        protected override Expression VisitParameter(ParameterExpression node)
+        {
+            if (node == sourceParameter)
+            {
+                throw Unsupported("an entity expression that is not a versioned property");
+            }
+
+            return base.VisitParameter(node);
+        }
+
+        protected override Expression VisitMember(MemberExpression node)
+        {
+            if (node.Expression == sourceParameter)
+            {
+                var property = source.FindProperty(node.Member.Name);
+                if (property is null)
+                {
+                    return base.VisitMember(node);
+                }
+
+                return Property(bag, property.ClrType, property);
+            }
+
+            return base.VisitMember(node);
+        }
+
+        protected override Expression VisitMethodCall(MethodCallExpression node)
+        {
+            if (node.Method.DeclaringType == typeof(EF)
+                && node.Method.Name == nameof(EF.Property)
+                && node.Arguments[0] == sourceParameter
+                && node.Arguments[1] is ConstantExpression { Value: string propertyName }
+                && source.FindProperty(propertyName) is { } property)
+            {
+                return Property(bag, node.Method.GetGenericArguments()[0], property);
+            }
+
+            return base.VisitMethodCall(node);
+        }
+
+        private MethodCallExpression Property(Expression instance, Type type, IReadOnlyProperty property)
+        {
+            var columnName = VersionedColumns.Collect(source)
+                .FirstOrDefault(item => ReferenceEquals(item.Property, property))?.Column
+                ?? throw Unsupported($"property '{source.DisplayName()}.{property.Name}' which is not stored in history");
+            return Expression.Call(_efProperty.MakeGenericMethod(type), instance, Expression.Constant(columnName));
+        }
+
+        private NotSupportedException Unsupported(string member)
+            => new($"History query filter '{filterName}' on '{source.DisplayName()}' uses {member}.");
     }
 
     // DESIGN.md D15. The history entity's identity (its Name in the model, as opposed to its mapped

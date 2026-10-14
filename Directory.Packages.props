@@ -46,10 +46,10 @@
 
   <!-- Tests -->
   <ItemGroup>
-    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="Microsoft.Testing.Extensions.TrxReport" Version="2.5.1" />
-    <PackageVersion Include="Verify.XunitV3" Version="33.3.1" />
-    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.15.0" />
+    <PackageVersion Include="Verify.XunitV3" Version="33.3.3" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.16.0" />
     <!-- Not a supported Hindsight provider (README.md → Limitations) - used only by
          HindsightOptionsExtensionTests to prove Validate() rejects a non-Npgsql provider. Pinned to
          the same floor as the EF Core / Npgsql group above so it doesn't force a downgrade conflict. -->
